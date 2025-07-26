@@ -1,0 +1,91 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mcp-coroot"
+version = "0.1.0"
+description = "MCP server for Coroot observability platform"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+authors = [
+    {name = "James Brink", email = "james@jamesbrink.net"},
+]
+maintainers = [
+    {name = "James Brink", email = "james@jamesbrink.net"},
+]
+keywords = ["mcp", "coroot", "monitoring", "observability", "apm", "tracing", "metrics"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: System :: Monitoring",
+]
+dependencies = [
+    "fastmcp>=2.10.6",
+    "httpx>=0.28.1",
+    "python-dotenv>=1.1.1",
+]
+
+[project.urls]
+Homepage = "https://github.com/jamesbrink/mcp-coroot"
+Repository = "https://github.com/jamesbrink/mcp-coroot"
+Issues = "https://github.com/jamesbrink/mcp-coroot/issues"
+Documentation = "https://github.com/jamesbrink/mcp-coroot#readme"
+
+[project.scripts]
+mcp-coroot = "mcp_coroot.server:main"
+
+[dependency-groups]
+dev = [
+    "mypy>=1.17.0",
+    "pytest>=8.4.1",
+    "pytest-asyncio>=1.1.0",
+    "pytest-cov>=6.2.1",
+    "ruff>=0.12.4",
+    "twine>=6.0.1",
+]
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E",  # pycodestyle errors
+    "W",  # pycodestyle warnings
+    "F",  # pyflakes
+    "I",  # isort
+    "B",  # flake8-bugbear
+    "C4", # flake8-comprehensions
+    "UP", # pyupgrade
+]
+ignore = []
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+no_implicit_reexport = true
+namespace_packages = true
+explicit_package_bases = true
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+ignore_errors = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "--cov=src/mcp_coroot --cov-report=term-missing"
+
+[tool.coverage.run]
+source = ["src/mcp_coroot"]
