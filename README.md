@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/jamesbrink/mcp-coroot/actions/workflows/ci.yml/badge.svg)](https://github.com/jamesbrink/mcp-coroot/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/jamesbrink/mcp-coroot/branch/main/graph/badge.svg)](https://codecov.io/gh/jamesbrink/mcp-coroot)
-[![PyPI version](https://badge.fury.io/py/mcp-coroot.svg)](https://badge.fury.io/py/mcp-coroot)
+[![PyPI version](https://img.shields.io/pypi/v/mcp-coroot.svg)](https://pypi.org/project/mcp-coroot/)
 [![Python versions](https://img.shields.io/pypi/pyversions/mcp-coroot.svg)](https://pypi.org/project/mcp-coroot/)
 
 A Model Context Protocol (MCP) server that provides seamless integration with [Coroot](https://coroot.com) observability platform. This server enables MCP clients to monitor applications, analyze performance metrics, examine logs and traces, and manage infrastructure through Coroot's comprehensive API.
