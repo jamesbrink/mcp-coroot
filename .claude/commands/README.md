@@ -6,10 +6,10 @@ This directory contains custom slash commands for testing the Coroot MCP server 
 
 ### `/test-coroot-tools`
 A comprehensive test suite that explicitly calls each MCP tool to verify functionality. This command:
-- Tests all 15 Coroot MCP tools in a logical sequence
+- Tests all 61 Coroot MCP tools in a logical sequence
 - Creates test resources with unique names to avoid conflicts
 - Provides detailed feedback on each tool's success/failure
-- Never modifies or deletes existing resources
+- Never modifies or deletes existing resources (except for test resources it creates)
 
 ### `/test-coroot-natural`
 The same comprehensive test but using natural language instead of tool names. This command:

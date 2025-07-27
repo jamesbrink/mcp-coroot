@@ -39,6 +39,9 @@ Perform a comprehensive test of the Coroot integration using natural language to
 9. **Configuration Management**
    - Show me what inspection types are available for monitoring
    - Display the current application categorization rules
+   - Create a new test application category with some patterns
+   - Update the test category to add more patterns
+   - Remove the test category we just created
    - Check if there are any custom application definitions
    - If applications exist, show me the SLO configuration for one
    - Test updating an inspection threshold (using the same value to avoid changes)
@@ -57,6 +60,7 @@ Perform a comprehensive test of the Coroot integration using natural language to
     - Update the test project settings (keeping the same values)
     - List all API keys for the test project
     - Create a new API key for testing
+    - Delete the test API key we just created
 
 13. **Infrastructure Details**
     - If nodes are found, get detailed information about one

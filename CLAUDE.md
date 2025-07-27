@@ -13,7 +13,7 @@ This file contains instructions for configuring the MCP Coroot server with Claud
 
 ## Overview
 
-The MCP Coroot server provides 59 tools for interacting with Coroot observability platform:
+The MCP Coroot server provides 61 tools for interacting with Coroot observability platform:
 - Authentication and user management (5 tools)
 - Project creation and management (9 tools)
 - Application monitoring and troubleshooting (3 tools)
@@ -21,7 +21,7 @@ The MCP Coroot server provides 59 tools for interacting with Coroot observabilit
 - Deployment and system overviews (5 tools)
 - Dashboard management (5 tools)
 - Integration configuration (4 tools)
-- Configuration management (7 tools)
+- Configuration management (9 tools)
 - Advanced troubleshooting (3 tools)
 - Custom cloud pricing (3 tools)
 - Database instrumentation (2 tools)
@@ -30,7 +30,7 @@ The MCP Coroot server provides 59 tools for interacting with Coroot observabilit
 - Health checks (1 tool)
 - Panel data and advanced configuration (6 tools)
 
-Test coverage: 87% (179 tests passing)
+Test coverage: 87% (197 tests passing)
 
 ## Quick Setup
 
@@ -154,6 +154,9 @@ Once configured, you can ask Claude to:
 - "Configure Prometheus integration"
 - "Update SLO thresholds for the API service"
 - "Show me the application categorization rules"
+- "Create a new application category for microservices"
+- "Update the database category to include new patterns"
+- "Delete the test category we no longer need"
 - "Create a custom dashboard for Redis monitoring"
 
 ### Advanced Features

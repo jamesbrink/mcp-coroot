@@ -371,3 +371,146 @@ class TestErrorHandling:
 
             assert result["success"] is False
             assert "Unexpected error" in result["error"]
+
+
+class TestApplicationCategoryTools:
+    """Test application category management tools."""
+
+    @pytest.mark.asyncio
+    async def test_create_application_category_impl(self):
+        """Test create_application_category_impl functionality."""
+        from mcp_coroot.server import create_application_category_impl
+
+        with patch("mcp_coroot.server.get_client") as mock_get_client:
+            mock_client = AsyncMock()
+            mock_client.create_application_category.return_value = {"status": "success"}
+            mock_get_client.return_value = mock_client
+
+            result = await create_application_category_impl(
+                "project123",
+                "test-category",
+                "test/* qa/*",
+                True,
+                False,
+                "#test-alerts",
+            )
+
+            assert result["success"] is True
+            assert "created successfully" in result["message"]
+
+            # Check that create_application_category was called with correct args
+            mock_client.create_application_category.assert_called_once()
+            call_args = mock_client.create_application_category.call_args
+            assert call_args[0][0] == "project123"
+
+            # Check the category dict structure
+            category = call_args[0][1]
+            assert category["name"] == "test-category"
+            assert category["custom_patterns"] == "test/* qa/*"
+            assert category["notification_settings"]["incidents"]["enabled"] is True
+            assert category["notification_settings"]["deployments"]["enabled"] is False
+            assert (
+                category["notification_settings"]["incidents"]["slack"]["channel"]
+                == "#test-alerts"
+            )
+            assert (
+                category["notification_settings"]["deployments"]["slack"]["channel"]
+                == "#test-alerts"
+            )
+
+    @pytest.mark.asyncio
+    async def test_update_application_category_impl(self):
+        """Test update_application_category_impl functionality."""
+        from mcp_coroot.server import update_application_category_impl
+
+        with patch("mcp_coroot.server.get_client") as mock_get_client:
+            mock_client = AsyncMock()
+            # Mock getting existing categories
+            mock_client.get_application_categories.return_value = [
+                {
+                    "name": "test-category",
+                    "custom_patterns": "test/*",
+                    "notification_settings": {
+                        "incidents": {"enabled": False},
+                        "deployments": {"enabled": False},
+                    },
+                }
+            ]
+            mock_client.update_application_category.return_value = {"status": "success"}
+            mock_get_client.return_value = mock_client
+
+            result = await update_application_category_impl(
+                "project123",
+                "test-category",
+                "test/* updated/*",
+                True,
+                None,  # Don't update deployments
+                "#new-channel",
+            )
+
+            assert result["success"] is True
+            assert "updated successfully" in result["message"]
+
+            # Verify it called get_application_categories to fetch existing
+            mock_client.get_application_categories.assert_called_once_with("project123")
+
+            # Verify update was called with merged data
+            mock_client.update_application_category.assert_called_once()
+            call_args = mock_client.update_application_category.call_args
+            assert call_args[0][0] == "project123"
+            assert call_args[0][1] == "test-category"
+
+            # Check the updated category structure
+            updated_cat = call_args[0][2]
+            assert updated_cat["custom_patterns"] == "test/* updated/*"
+            assert updated_cat["notification_settings"]["incidents"]["enabled"] is True
+            assert (
+                updated_cat["notification_settings"]["deployments"]["enabled"] is False
+            )  # Unchanged
+
+            # Check slack channel was updated
+            if "slack" in updated_cat["notification_settings"]["incidents"]:
+                assert (
+                    updated_cat["notification_settings"]["incidents"]["slack"][
+                        "channel"
+                    ]
+                    == "#new-channel"
+                )
+
+    @pytest.mark.asyncio
+    async def test_update_application_category_not_found(self):
+        """Test update_application_category_impl with non-existent category."""
+        from mcp_coroot.server import update_application_category_impl
+
+        with patch("mcp_coroot.server.get_client") as mock_get_client:
+            mock_client = AsyncMock()
+            # Return empty list - category not found
+            mock_client.get_application_categories.return_value = []
+            mock_get_client.return_value = mock_client
+
+            result = await update_application_category_impl(
+                "project123", "non-existent", "test/*"
+            )
+
+            assert result["success"] is False
+            assert "not found" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_delete_application_category_impl(self):
+        """Test delete_application_category_impl functionality."""
+        from mcp_coroot.server import delete_application_category_impl
+
+        with patch("mcp_coroot.server.get_client") as mock_get_client:
+            mock_client = AsyncMock()
+            mock_client.delete_application_category.return_value = {"status": "success"}
+            mock_get_client.return_value = mock_client
+
+            result = await delete_application_category_impl(
+                "project123", "test-category"
+            )
+
+            assert result["success"] is True
+            assert "deleted successfully" in result["message"]
+            mock_client.delete_application_category.assert_called_once_with(
+                "project123", "test-category"
+            )

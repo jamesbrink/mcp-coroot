@@ -121,7 +121,7 @@ Only supports data ingestion endpoints (`/v1/*`). Cannot be used for management 
 
 ## Available Tools
 
-The server provides **59 tools** organized into functional categories:
+The server provides **61 tools** organized into functional categories:
 
 ### 🔐 Authentication & Users (5 tools)
 - `get_current_user` - Get authenticated user information
@@ -166,12 +166,14 @@ The server provides **59 tools** organized into functional categories:
 - `test_integration` - Test connectivity
 - `delete_integration` - Remove integration
 
-### ⚙️ Configuration (7 tools)
+### ⚙️ Configuration (9 tools)
 - `list_inspections` - View inspection types
 - `get_inspection_config` - Get inspection settings
 - `update_inspection_config` - Update inspections
 - `get_application_categories` - View categories
-- `update_application_categories` - Update categories
+- `create_application_category` - Create new category
+- `update_application_category` - Update existing category
+- `delete_application_category` - Delete category
 - `get_custom_applications` - View custom apps
 - `update_custom_applications` - Define custom apps
 

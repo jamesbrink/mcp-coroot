@@ -784,36 +784,194 @@ async def get_application_categories(project_id: str) -> dict[str, Any]:
 
 
 @handle_errors
-async def update_application_categories_impl(
+async def create_application_category_impl(
     project_id: str,
-    categories: dict[str, Any],
+    name: str,
+    custom_patterns: str,
+    notify_incidents: bool = True,
+    notify_deployments: bool = False,
+    slack_channel: str | None = None,
 ) -> dict[str, Any]:
-    """Update application categories."""
-    result = await get_client().update_application_categories(project_id, categories)
+    """Create a new application category."""
+    category: dict[str, Any] = {
+        "name": name,
+        "builtin": False,
+        "default": False,
+        "builtin_patterns": "",
+        "custom_patterns": custom_patterns,
+        "notification_settings": {
+            "incidents": {
+                "enabled": notify_incidents,
+            },
+            "deployments": {
+                "enabled": notify_deployments,
+            },
+        },
+    }
+
+    # Add Slack channel if specified
+    if slack_channel:
+        notifications = category["notification_settings"]
+        notifications["incidents"]["slack"] = {
+            "enabled": True,
+            "channel": slack_channel,
+        }
+        notifications["deployments"]["slack"] = {
+            "enabled": notify_deployments,
+            "channel": slack_channel,
+        }
+
+    await get_client().create_application_category(project_id, category)
     return {
         "success": True,
-        "message": "Application categories updated successfully",
-        "categories": result,
+        "message": f"Application category '{name}' created successfully",
     }
 
 
 @mcp.tool()
-async def update_application_categories(
+async def create_application_category(
     project_id: str,
-    categories: dict[str, Any],
+    name: str,
+    custom_patterns: str,
+    notify_incidents: bool = True,
+    notify_deployments: bool = False,
+    slack_channel: str | None = None,
 ) -> dict[str, Any]:
-    """Update application categories configuration.
+    """Create a new application category.
 
-    Updates the rules for categorizing applications. Categories can include
-    custom patterns for matching applications by namespace, name, etc.
+    Creates a category for grouping applications based on namespace/name patterns.
+    Patterns must be space-separated and in format namespace/name
+    (e.g., "test/* demo/*").
+    Each pattern must contain exactly one '/' and cannot start with '/'.
 
     Args:
         project_id: Project ID
-        categories: New categories configuration with patterns
+        name: Category name (lowercase letters, numbers, hyphens,
+            underscores; min 3 chars)
+        custom_patterns: Space-separated glob patterns (e.g., "test/* demo/*")
+        notify_incidents: Whether to notify about incidents (default: True)
+        notify_deployments: Whether to notify about deployments (default: False)
+        slack_channel: Slack channel for notifications (optional)
     """
-    return await update_application_categories_impl(  # type: ignore[no-any-return]
-        project_id, categories
+    return await create_application_category_impl(  # type: ignore[no-any-return]
+        project_id,
+        name,
+        custom_patterns,
+        notify_incidents,
+        notify_deployments,
+        slack_channel,
     )
+
+
+@handle_errors
+async def update_application_category_impl(
+    project_id: str,
+    name: str,
+    custom_patterns: str | None = None,
+    notify_incidents: bool | None = None,
+    notify_deployments: bool | None = None,
+    slack_channel: str | None = None,
+) -> dict[str, Any]:
+    """Update an existing application category."""
+    # First get the existing category
+    categories = await get_client().get_application_categories(project_id)
+    existing: dict[str, Any] | None = None
+    for cat in categories:
+        if isinstance(cat, dict) and cat.get("name") == name:
+            existing = cat
+            break
+
+    if not existing:
+        raise ValueError(f"Category '{name}' not found")
+
+    # Update only specified fields
+    if custom_patterns is not None:
+        existing["custom_patterns"] = custom_patterns
+
+    if notify_incidents is not None:
+        existing["notification_settings"]["incidents"]["enabled"] = notify_incidents
+
+    if notify_deployments is not None:
+        existing["notification_settings"]["deployments"]["enabled"] = notify_deployments
+
+    if slack_channel is not None:
+        if "slack" not in existing["notification_settings"]["incidents"]:
+            existing["notification_settings"]["incidents"]["slack"] = {}
+        slack = existing["notification_settings"]["incidents"]["slack"]
+        slack["channel"] = slack_channel
+        slack["enabled"] = True
+
+        if "slack" not in existing["notification_settings"]["deployments"]:
+            existing["notification_settings"]["deployments"]["slack"] = {}
+        slack = existing["notification_settings"]["deployments"]["slack"]
+        slack["channel"] = slack_channel
+
+    await get_client().update_application_category(project_id, name, existing)
+    return {
+        "success": True,
+        "message": f"Application category '{name}' updated successfully",
+    }
+
+
+@mcp.tool()
+async def update_application_category(
+    project_id: str,
+    name: str,
+    custom_patterns: str | None = None,
+    notify_incidents: bool | None = None,
+    notify_deployments: bool | None = None,
+    slack_channel: str | None = None,
+) -> dict[str, Any]:
+    """Update an existing application category.
+
+    Updates specific fields of an application category.
+    Only provided fields are updated.
+
+    Args:
+        project_id: Project ID
+        name: Category name to update
+        custom_patterns: New space-separated glob patterns (optional)
+        notify_incidents: Whether to notify about incidents (optional)
+        notify_deployments: Whether to notify about deployments (optional)
+        slack_channel: Slack channel for notifications (optional)
+    """
+    return await update_application_category_impl(  # type: ignore[no-any-return]
+        project_id,
+        name,
+        custom_patterns,
+        notify_incidents,
+        notify_deployments,
+        slack_channel,
+    )
+
+
+@handle_errors
+async def delete_application_category_impl(
+    project_id: str,
+    name: str,
+) -> dict[str, Any]:
+    """Delete an application category."""
+    await get_client().delete_application_category(project_id, name)
+    return {
+        "success": True,
+        "message": f"Application category '{name}' deleted successfully",
+    }
+
+
+@mcp.tool()
+async def delete_application_category(
+    project_id: str,
+    name: str,
+) -> dict[str, Any]:
+    """Delete an application category.
+
+    Removes a custom application category. Built-in categories cannot be deleted.
+
+    Args:
+        project_id: Project ID
+        name: Category name to delete
+    """
+    return await delete_application_category_impl(project_id, name)  # type: ignore[no-any-return]
 
 
 @handle_errors

@@ -729,23 +729,66 @@ class CorootClient:
         data: dict[str, Any] = response.json()
         return data
 
-    async def update_application_categories(
-        self, project_id: str, categories: dict[str, Any]
+    async def create_application_category(
+        self, project_id: str, category: dict[str, Any]
     ) -> dict[str, Any]:
-        """Update application categories configuration.
+        """Create a new application category.
 
         Args:
             project_id: Project ID.
-            categories: New categories configuration.
+            category: Category object with name and patterns.
 
         Returns:
-            Updated categories.
+            Created category.
         """
         response = await self._request(
-            "POST", f"/api/project/{project_id}/application_categories", json=categories
+            "POST", f"/api/project/{project_id}/application_categories", json=category
         )
-        data: dict[str, Any] = response.json()
-        return data
+        return self._parse_json_response(response)
+
+    async def update_application_category(
+        self, project_id: str, category_name: str, category: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Update an existing application category.
+
+        Args:
+            project_id: Project ID.
+            category_name: Name of the category to update.
+            category: Updated category object.
+
+        Returns:
+            Updated category.
+        """
+        # Set the id field for updates
+        category["id"] = category_name
+        response = await self._request(
+            "POST", f"/api/project/{project_id}/application_categories", json=category
+        )
+        return self._parse_json_response(response)
+
+    async def delete_application_category(
+        self, project_id: str, category_name: str
+    ) -> dict[str, Any]:
+        """Delete an application category.
+
+        Args:
+            project_id: Project ID.
+            category_name: Name of the category to delete.
+
+        Returns:
+            Deletion result.
+        """
+        # For delete, we need to send a minimal valid structure with action and id
+        data = {
+            "action": "delete", 
+            "id": category_name,
+            "name": category_name,  # Required for validation
+            "custom_patterns": ""  # Required for validation
+        }
+        response = await self._request(
+            "POST", f"/api/project/{project_id}/application_categories", json=data
+        )
+        return self._parse_json_response(response)
 
     async def get_custom_applications(self, project_id: str) -> dict[str, Any]:
         """Get custom applications configuration.

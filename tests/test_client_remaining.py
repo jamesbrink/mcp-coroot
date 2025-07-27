@@ -279,7 +279,9 @@ class TestRemainingClientFeatures:
         with patch(
             "httpx.AsyncClient.request", return_value=mock_response
         ) as mock_request:
-            result = await client.delete_api_key("project123", "EMUHGTklu-miwJKD5IjO2Z4OSyO8Vrzn")
+            result = await client.delete_api_key(
+                "project123", "EMUHGTklu-miwJKD5IjO2Z4OSyO8Vrzn"
+            )
 
             # Verify request (should be 2 calls: login + delete)
             assert mock_request.call_count == 2
@@ -287,12 +289,133 @@ class TestRemainingClientFeatures:
             delete_call = mock_request.call_args_list[1]
             assert delete_call.args[0] == "POST"
             assert delete_call.args[1].endswith("/api/project/project123/api_keys")
-            
+
             # Verify the correct structure was sent
             call_args = mock_request.call_args
             assert call_args.kwargs["json"]["action"] == "delete"
             assert call_args.kwargs["json"]["key"] == "EMUHGTklu-miwJKD5IjO2Z4OSyO8Vrzn"
-            
+
+            # Verify result
+            assert result["status"] == "success"
+
+    # Application Category Management Tests
+
+    async def test_create_application_category(self, client):
+        """Test creating a new application category."""
+        mock_response = AsyncMock()
+        mock_response.json = Mock(return_value={"status": "success"})
+        mock_response.text = ""
+        mock_response.raise_for_status = AsyncMock()
+        mock_response.status_code = 200
+
+        with patch(
+            "httpx.AsyncClient.request", return_value=mock_response
+        ) as mock_request:
+            # The client method takes a category dictionary
+            category = {
+                "name": "test-category",
+                "custom_patterns": "test/* qa/*",
+                "notification_settings": {
+                    "incidents": {"enabled": True},
+                    "deployments": {"enabled": False}
+                }
+            }
+            result = await client.create_application_category(
+                "project123",
+                category
+            )
+
+            # Verify request
+            assert mock_request.call_count == 2  # login + create
+            create_call = mock_request.call_args_list[1]
+            assert create_call.args[0] == "POST"
+            assert create_call.args[1].endswith("/api/project/project123/application_categories")
+
+            # Verify the correct structure was sent
+            call_args = mock_request.call_args
+            json_data = call_args.kwargs["json"]
+            assert json_data["name"] == "test-category"
+            assert json_data["custom_patterns"] == "test/* qa/*"
+            assert json_data["notification_settings"]["incidents"]["enabled"] is True
+            assert json_data["notification_settings"]["deployments"]["enabled"] is False
+
+            # Verify result
+            assert result["status"] == "success"
+
+    async def test_update_application_category(self, client):
+        """Test updating an existing application category."""
+        mock_response = AsyncMock()
+        mock_response.json = Mock(return_value={"status": "success"})
+        mock_response.text = ""
+        mock_response.raise_for_status = AsyncMock()
+        mock_response.status_code = 200
+
+        category_update = {
+            "name": "test-category",
+            "custom_patterns": "test/* updated/*",
+            "notification_settings": {
+                "incidents": {"enabled": True},
+                "deployments": {"enabled": True}
+            }
+        }
+
+        with patch(
+            "httpx.AsyncClient.request", return_value=mock_response
+        ) as mock_request:
+            result = await client.update_application_category(
+                "project123",
+                "test-category",
+                category_update
+            )
+
+            # Verify request
+            assert mock_request.call_count == 2  # login + update
+            update_call = mock_request.call_args_list[1]
+            assert update_call.args[0] == "POST"
+            assert update_call.args[1].endswith("/api/project/project123/application_categories")
+
+            # Verify the correct structure was sent (NO action field for updates)
+            call_args = mock_request.call_args
+            json_data = call_args.kwargs["json"]
+            assert "action" not in json_data
+            assert json_data["id"] == "test-category"
+            assert json_data["name"] == "test-category"
+            assert json_data["custom_patterns"] == "test/* updated/*"
+            assert json_data["notification_settings"]["incidents"]["enabled"] is True
+            assert json_data["notification_settings"]["deployments"]["enabled"] is True
+
+            # Verify result
+            assert result["status"] == "success"
+
+    async def test_delete_application_category(self, client):
+        """Test deleting an application category."""
+        mock_response = AsyncMock()
+        mock_response.json = Mock(return_value={"status": "success"})
+        mock_response.text = ""
+        mock_response.raise_for_status = AsyncMock()
+        mock_response.status_code = 200
+
+        with patch(
+            "httpx.AsyncClient.request", return_value=mock_response
+        ) as mock_request:
+            result = await client.delete_application_category(
+                "project123", "test-category"
+            )
+
+            # Verify request
+            assert mock_request.call_count == 2  # login + delete
+            delete_call = mock_request.call_args_list[1]
+            assert delete_call.args[0] == "POST"
+            assert delete_call.args[1].endswith("/api/project/project123/application_categories")
+
+            # Verify the correct structure was sent
+            call_args = mock_request.call_args
+            json_data = call_args.kwargs["json"]
+            assert json_data["action"] == "delete"
+            assert json_data["id"] == "test-category"
+            assert json_data["name"] == "test-category"  # Required for validation
+            assert json_data["custom_patterns"] == ""  # Required for validation
+
             # Verify result
             assert result["status"] == "success"
 

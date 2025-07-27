@@ -39,11 +39,13 @@ Execute a comprehensive test of all Coroot MCP tools in a safe, non-destructive 
 9. **Configuration Management**
    - Use the `list_inspections` tool to view available inspection types
    - Use the `get_application_categories` tool to view current app categories
+   - Use the `create_application_category` tool to create a test category
+   - Use the `update_application_category` tool to update the test category
+   - Use the `delete_application_category` tool to remove the test category
    - Use the `get_custom_applications` tool to view custom app definitions
    - If applications exist:
      - Use the `get_inspection_config` tool to get inspection configuration for an app
      - Use the `update_inspection_config` tool to test updating a configuration (with same values)
-   - Use the `update_application_categories` tool to test category updates (optional)
    - Use the `update_custom_applications` tool to test custom app updates (optional)
 
 10. **Advanced Application Features**
@@ -61,6 +63,7 @@ Execute a comprehensive test of all Coroot MCP tools in a safe, non-destructive 
     - Use the `update_project_settings` tool to test project settings update (with same values)
     - Use the `list_api_keys` tool to view project API keys
     - Use the `create_api_key` tool to create a test API key
+    - Use the `delete_api_key` tool to remove the test API key
 
 13. **Node & Incident Management**
     - If nodes exist from overview:
