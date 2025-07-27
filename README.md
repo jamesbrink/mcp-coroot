@@ -7,6 +7,10 @@
 
 A Model Context Protocol (MCP) server that provides seamless integration with [Coroot](https://coroot.com) observability platform. This server enables MCP clients to monitor applications, analyze performance metrics, examine logs and traces, and manage infrastructure through Coroot's comprehensive API.
 
+<a href="https://glama.ai/mcp/servers/@jamesbrink/mcp-coroot">
+  <img width="380" height="200" src="https://glama.ai/mcp/servers/@jamesbrink/mcp-coroot/badge" alt="Server for Coroot MCP server" />
+</a>
+
 ## Getting Started
 
 Add this configuration to your MCP client settings:
