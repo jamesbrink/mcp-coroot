@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "coroot": {
+      "command": "uvx",
+      "args": [
+        "--from",
+        "https://test.pypi.org/simple/",
+        "mcp-coroot"
+      ],
+      "env": {
+        "COROOT_BASE_URL": "http://localhost:8080",
+        "COROOT_USERNAME": "admin",
+        "COROOT_PASSWORD": "your-password"
+      }
+    }
+  }
+}

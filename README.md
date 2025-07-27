@@ -202,6 +202,34 @@ Including RCA, profiling, cloud pricing, database instrumentation, SSO/AI config
 
 ## Development
 
+### Using Test PyPI Version
+
+To use the pre-release version from Test PyPI:
+
+```json
+{
+  "mcpServers": {
+    "coroot": {
+      "command": "uvx",
+      "args": [
+        "--index-url",
+        "https://test.pypi.org/simple/",
+        "--extra-index-url",
+        "https://pypi.org/simple/",
+        "mcp-coroot"
+      ],
+      "env": {
+        "COROOT_BASE_URL": "http://localhost:8080",
+        "COROOT_USERNAME": "admin",
+        "COROOT_PASSWORD": "your-password"
+      }
+    }
+  }
+}
+```
+
+Note: The `--extra-index-url` is required because Test PyPI doesn't host all dependencies.
+
 ### Testing
 ```bash
 # Run all tests
