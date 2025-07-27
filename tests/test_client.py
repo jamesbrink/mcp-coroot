@@ -59,6 +59,75 @@ class TestClientInitialization:
         client = CorootClient(username="admin", password="pass")
         assert client.base_url == "http://localhost:8080"
 
+    def test_init_with_mixed_auth_env_vars(self, monkeypatch):
+        """Test client initialization with both session cookie and username/password."""
+        monkeypatch.setenv("COROOT_BASE_URL", "http://localhost:8080")
+        monkeypatch.setenv("COROOT_USERNAME", "user")
+        monkeypatch.setenv("COROOT_PASSWORD", "pass")
+        monkeypatch.setenv("COROOT_SESSION_COOKIE", "existing-session")
+
+        client = CorootClient()
+
+        assert client.username == "user"
+        assert client.password == "pass"
+        assert client.session_cookie == "existing-session"
+
+    async def test_auth_priority_session_cookie_over_credentials(self):
+        """Test that session cookie takes priority over username/password."""
+        client = CorootClient(
+            base_url="http://localhost:8080",
+            username="user",
+            password="pass",
+            session_cookie="existing-session",
+        )
+
+        # Mock the request to check headers
+        mock_response = AsyncMock()
+        mock_response.status_code = 200
+        mock_response.json = Mock(return_value={"projects": []})
+        mock_response.raise_for_status = AsyncMock()
+
+        with patch(
+            "httpx.AsyncClient.request", return_value=mock_response
+        ) as mock_request:
+            await client.list_projects()
+
+        # Should use session cookie, not attempt login
+        call_args = mock_request.call_args
+        assert call_args.kwargs["cookies"]["coroot_session"] == "existing-session"
+        # Login endpoint should not have been called
+        assert mock_request.call_count == 1
+        assert "/api/login" not in str(call_args.args[1])
+
+    async def test_auth_fallback_to_credentials_no_session(self):
+        """Test that credentials are used when no session cookie exists."""
+        client = CorootClient(
+            base_url="http://localhost:8080", username="user", password="pass"
+        )
+
+        # Mock login response
+        mock_login_response = AsyncMock()
+        mock_login_response.cookies = {"coroot_session": "new-session"}
+        mock_login_response.raise_for_status = AsyncMock()
+
+        # Mock actual API response
+        mock_api_response = AsyncMock()
+        mock_api_response.status_code = 200
+        mock_api_response.json = Mock(return_value={"projects": []})
+        mock_api_response.raise_for_status = AsyncMock()
+
+        with patch(
+            "httpx.AsyncClient.request",
+            side_effect=[mock_login_response, mock_api_response],
+        ) as mock_request:
+            await client.list_projects()
+
+        # Should have attempted login first
+        assert mock_request.call_count == 2
+        login_call = mock_request.call_args_list[0]
+        assert "/api/login" in str(login_call.args[1])
+        assert client.session_cookie == "new-session"
+
 
 @pytest.mark.asyncio
 class TestAuthentication:
@@ -577,9 +646,7 @@ class TestApplicationMonitoring:
         )
         mock_response.raise_for_status = AsyncMock()
 
-        with patch(
-            "httpx.AsyncClient.request", return_value=mock_response
-        ):
+        with patch("httpx.AsyncClient.request", return_value=mock_response):
             logs = await client.get_application_logs(
                 "proj1",
                 "default/deployment/test-app",

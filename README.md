@@ -27,6 +27,22 @@ Add this configuration to your MCP client settings:
 }
 ```
 
+**Using Docker:**
+```json
+{
+  "mcpServers": {
+    "coroot": {
+      "command": "docker",
+      "args": ["run", "--rm", "-i", 
+              "-e", "COROOT_BASE_URL=http://localhost:8080",
+              "-e", "COROOT_USERNAME=admin",
+              "-e", "COROOT_PASSWORD=your-password",
+              "jamesbrink/mcp-coroot:latest"]
+    }
+  }
+}
+```
+
 **For SSO/MFA users**, use session cookie authentication instead:
 
 ```json
@@ -89,6 +105,15 @@ uvx mcp-coroot
 ### Using pip
 ```bash
 pip install mcp-coroot
+```
+
+### Using Docker
+```bash
+docker run --rm -i \
+  -e COROOT_BASE_URL="http://localhost:8080" \
+  -e COROOT_USERNAME="admin" \
+  -e COROOT_PASSWORD="your-password" \
+  jamesbrink/mcp-coroot:latest
 ```
 
 ### From Source
