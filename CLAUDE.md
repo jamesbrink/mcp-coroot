@@ -7,6 +7,14 @@
 
 Please DO NOT create any other markdown documentation files. All documentation should be consolidated into these two files.
 
+**IMPORTANT TESTING STANDARDS**: 
+This project follows professional Python testing standards:
+- Test files must follow Python naming conventions: `test_*.py`
+- Test files should be organized by the module they test (e.g., `test_client.py` for client functionality, `test_server.py` for server functionality)
+- DO NOT use unprofessional suffixes like `test_final_*.py`, `test_new_*.py`, `test_all_remaining_*.py`, etc.
+- Consolidate related tests into appropriately named test files rather than creating multiple files with incremental names
+- All tests must maintain their original functionality when moved between files
+
 ---
 
 This file contains instructions for configuring the MCP Coroot server with Claude Desktop.

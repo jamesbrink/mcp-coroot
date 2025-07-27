@@ -780,10 +780,10 @@ class CorootClient:
         """
         # For delete, we need to send a minimal valid structure with action and id
         data = {
-            "action": "delete", 
+            "action": "delete",
             "id": category_name,
             "name": category_name,  # Required for validation
-            "custom_patterns": ""  # Required for validation
+            "custom_patterns": "",  # Required for validation
         }
         response = await self._request(
             "POST", f"/api/project/{project_id}/application_categories", json=data

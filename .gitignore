@@ -50,7 +50,7 @@ dmypy.json
 # Environment
 .env
 .env.local
-.mcp.json
+.mcp.*
 
 # macOS
 .DS_Store
