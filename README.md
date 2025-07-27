@@ -121,7 +121,7 @@ Only supports data ingestion endpoints (`/v1/*`). Cannot be used for management 
 
 ## Available Tools
 
-The server provides **58 tools** organized into functional categories:
+The server provides **59 tools** organized into functional categories:
 
 ### 🔐 Authentication & Users (5 tools)
 - `get_current_user` - Get authenticated user information
@@ -130,7 +130,7 @@ The server provides **58 tools** organized into functional categories:
 - `create_user` - Create new users
 - `get_roles` - View roles and permissions
 
-### 📊 Project Management (8 tools)
+### 📊 Project Management (9 tools)
 - `list_projects` - List all accessible projects
 - `get_project` - Get project details
 - `create_project` - Create new project
@@ -139,6 +139,7 @@ The server provides **58 tools** organized into functional categories:
 - `delete_project` - Delete project
 - `list_api_keys` - View API keys
 - `create_api_key` - Generate API keys
+- `delete_api_key` - Delete API keys
 
 ### 🚀 Application Monitoring (3 tools)
 - `get_application` - Comprehensive application metrics

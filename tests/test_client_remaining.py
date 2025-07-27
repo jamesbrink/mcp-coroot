@@ -268,6 +268,34 @@ class TestRemainingClientFeatures:
                 call_args.kwargs["json"]["description"] == "Test Key"
             )  # Always uses name
 
+    async def test_delete_api_key(self, client):
+        """Test deleting an API key."""
+        mock_response = AsyncMock()
+        mock_response.json = Mock(return_value={"status": "success"})
+        mock_response.text = ""
+        mock_response.raise_for_status = AsyncMock()
+        mock_response.status_code = 200
+
+        with patch(
+            "httpx.AsyncClient.request", return_value=mock_response
+        ) as mock_request:
+            result = await client.delete_api_key("project123", "EMUHGTklu-miwJKD5IjO2Z4OSyO8Vrzn")
+
+            # Verify request (should be 2 calls: login + delete)
+            assert mock_request.call_count == 2
+            # Check the second call (delete API key)
+            delete_call = mock_request.call_args_list[1]
+            assert delete_call.args[0] == "POST"
+            assert delete_call.args[1].endswith("/api/project/project123/api_keys")
+            
+            # Verify the correct structure was sent
+            call_args = mock_request.call_args
+            assert call_args.kwargs["json"]["action"] == "delete"
+            assert call_args.kwargs["json"]["key"] == "EMUHGTklu-miwJKD5IjO2Z4OSyO8Vrzn"
+            
+            # Verify result
+            assert result["status"] == "success"
+
     # User & Role Management Tests
 
     async def test_update_current_user(self, client):

@@ -1151,6 +1151,24 @@ class CorootClient:
         )
         return self._parse_json_response(response)
 
+    async def delete_api_key(self, project_id: str, key: str) -> dict[str, Any]:
+        """Delete an API key.
+
+        Args:
+            project_id: Project ID.
+            key: The API key to delete.
+
+        Returns:
+            Success status.
+        """
+        data = {"action": "delete", "key": key}
+        response = await self._request(
+            "POST",
+            f"/api/project/{project_id}/api_keys",
+            json=data,
+        )
+        return self._parse_json_response(response)
+
     async def delete_dashboard(
         self, project_id: str, dashboard_id: str
     ) -> dict[str, Any]:

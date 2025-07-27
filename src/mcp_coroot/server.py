@@ -1405,6 +1405,29 @@ async def create_api_key(
     return await create_api_key_impl(project_id, name, description)  # type: ignore[no-any-return]
 
 
+@handle_errors
+async def delete_api_key_impl(project_id: str, key: str) -> dict[str, Any]:
+    """Delete an API key."""
+    await get_client().delete_api_key(project_id, key)
+    return {
+        "success": True,
+        "message": "API key deleted successfully",
+    }
+
+
+@mcp.tool()
+async def delete_api_key(project_id: str, key: str) -> dict[str, Any]:
+    """Delete an API key.
+
+    Removes an API key from the project. This action cannot be undone.
+
+    Args:
+        project_id: Project ID
+        key: The API key to delete (the actual key string)
+    """
+    return await delete_api_key_impl(project_id, key)  # type: ignore[no-any-return]
+
+
 # User & Role Management
 
 

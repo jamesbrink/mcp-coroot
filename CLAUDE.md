@@ -13,9 +13,9 @@ This file contains instructions for configuring the MCP Coroot server with Claud
 
 ## Overview
 
-The MCP Coroot server provides 58 tools for interacting with Coroot observability platform:
+The MCP Coroot server provides 59 tools for interacting with Coroot observability platform:
 - Authentication and user management (5 tools)
-- Project creation and management (8 tools)
+- Project creation and management (9 tools)
 - Application monitoring and troubleshooting (3 tools)
 - Infrastructure overview and incidents (2 tools)
 - Deployment and system overviews (5 tools)

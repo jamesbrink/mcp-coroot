@@ -8,6 +8,7 @@ from mcp_coroot.server import (
     create_api_key_impl,
     create_dashboard_impl,
     create_user_impl,
+    delete_api_key_impl,
     delete_integration_impl,
     delete_project_impl,
     get_dashboard_impl,
@@ -276,6 +277,23 @@ class TestAdvancedProjectManagement:
         assert result["api_key"] == mock_response
         mock_client.create_api_key.assert_called_once_with(
             "project123", "New Key", "Test key"
+        )
+
+    @patch("mcp_coroot.server.get_client")
+    async def test_delete_api_key_success(self, mock_get_client: Mock) -> None:
+        """Test successful API key deletion."""
+        mock_client = AsyncMock()
+        mock_get_client.return_value = mock_client
+
+        # Mock successful deletion (no return value)
+        mock_client.delete_api_key.return_value = None
+
+        result = await delete_api_key_impl("project123", "EMUHGTklu-miwJKD5IjO2Z4OSyO8Vrzn")
+
+        assert result["success"] is True
+        assert result["message"] == "API key deleted successfully"
+        mock_client.delete_api_key.assert_called_once_with(
+            "project123", "EMUHGTklu-miwJKD5IjO2Z4OSyO8Vrzn"
         )
 
 
