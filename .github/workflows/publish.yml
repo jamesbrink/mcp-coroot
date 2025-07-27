@@ -8,9 +8,38 @@ permissions:
   contents: read
 
 jobs:
-  deploy:
+  deploy-test:
     runs-on: ubuntu-latest
-    environment: release
+    environment: pypi-test
+    permissions:
+      id-token: write
+
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install uv
+      uses: astral-sh/setup-uv@v6
+    
+    - name: Set up Python
+      run: uv python install 3.12
+    
+    - name: Install dependencies
+      run: |
+        uv sync --all-extras --dev
+    
+    - name: Build package
+      run: |
+        uv build
+    
+    - name: Publish package to Test PyPI
+      uses: pypa/gh-action-pypi-publish@release/v1
+      with:
+        repository-url: https://test.pypi.org/legacy/
+
+  deploy-prod:
+    needs: deploy-test
+    runs-on: ubuntu-latest
+    environment: pypi
     permissions:
       id-token: write
 
