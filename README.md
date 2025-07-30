@@ -1,3 +1,5 @@
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/jamesbrink-mcp-coroot-badge.png)](https://mseep.ai/app/jamesbrink-mcp-coroot)
+
 # MCP Server for Coroot
 
 [![CI](https://github.com/jamesbrink/mcp-coroot/actions/workflows/ci.yml/badge.svg)](https://github.com/jamesbrink/mcp-coroot/actions/workflows/ci.yml)
