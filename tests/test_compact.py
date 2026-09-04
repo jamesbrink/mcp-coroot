@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from mcp_coroot.server.compact import (
+    chart_group_summary,
     chart_summary,
     compact,
     encoded_size,
@@ -130,3 +131,43 @@ def test_status_counts_and_limit_items() -> None:
     assert (kept, omitted) == ([1, 2], 2)
     assert limit_items([1, 2], 5) == ([1, 2], 0)
     assert limit_items([1, 2], 0) == ([1, 2], 0)
+
+
+def test_chart_group_keeps_every_chart() -> None:
+    # Coroot's audit reports are built mostly from chart groups, which are
+    # {"title", "charts": [Chart]} rather than charts themselves.
+    group = {
+        "title": "CPU usage by instance, cores",
+        "charts": [
+            {"title": "api-1", "series": [{"name": "usage", "data": [0.5, 1.5]}]},
+            {"title": "api-2", "series": [{"name": "usage", "data": [2.0, 4.0]}]},
+        ],
+    }
+    result = compact({"chart_group": group})
+    charts = result["chart_group"]["charts"]
+    assert result["chart_group"]["title"] == "CPU usage by instance, cores"
+    assert len(charts) == 2
+    assert charts[0]["series"][0]["max"] == 1.5
+    assert charts[1]["series"][0]["avg"] == 3.0
+
+
+def test_chart_group_summary_handles_odd_shapes() -> None:
+    assert chart_group_summary("not-a-group") == "not-a-group"
+    # A group without a charts list falls back to chart handling.
+    assert chart_group_summary({"title": "t", "series": []})["title"] == "t"
+
+
+def test_latency_is_not_treated_as_a_chart() -> None:
+    # Coroot's 'latency' is a profile or a status parameter, never a Chart.
+    latency = {"type": "::nanoseconds", "flamegraph": {"name": "root", "total": 5}}
+    result = compact({"latency": latency})
+    assert result["latency"]["type"] == "::nanoseconds"
+    assert result["latency"]["flamegraph"]["total"] == 5
+
+
+def test_list_items_that_compact_to_nothing_are_kept() -> None:
+    # Counts are computed before compaction, so the list length must not change.
+    items = [{"name": "a"}, {"icon": "dropped-key"}, {"name": "b"}]
+    result = compact({"items": items})
+    assert len(result["items"]) == 3
+    assert result["items"][1] == {}

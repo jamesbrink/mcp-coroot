@@ -14,7 +14,10 @@ from collections.abc import Iterable, Sequence
 from typing import Any
 
 #: Keys whose values are chart payloads; replaced by a statistical summary.
-CHART_KEYS = frozenset({"chart", "chart_group", "heatmap", "flamegraph", "latency"})
+CHART_KEYS = frozenset({"chart", "heatmap"})
+
+#: Keys holding a ``{"title", "charts": [...]}`` group of charts.
+CHART_GROUP_KEYS = frozenset({"chart_group"})
 
 #: Keys that are pure presentation and are dropped outright.
 NOISE_KEYS = frozenset(
@@ -98,6 +101,26 @@ def chart_summary(chart: Any) -> Any:
     return summary
 
 
+def chart_group_summary(group: Any) -> Any:
+    """Summarise a Coroot chart group, keeping every chart inside it.
+
+    A ``ChartGroup`` is ``{"title": str, "charts": [Chart]}``. Treating it like a
+    single chart would drop every series it holds, which is most of the data in
+    an audit report.
+    """
+    if not isinstance(group, dict):
+        return group
+    charts = group.get("charts")
+    if not isinstance(charts, list):
+        return chart_summary(group)
+    summary: dict[str, Any] = {}
+    if title := group.get("title"):
+        summary["title"] = title
+    summarised = [chart_summary(chart) for chart in charts]
+    summary["charts"] = [chart for chart in summarised if chart is not None]
+    return summary or None
+
+
 def flamegraph_summary(node: Any, *, top: int = 15) -> Any:
     """Reduce a flame graph to its heaviest leaves.
 
@@ -144,6 +167,12 @@ def compact(value: Any, *, depth: int = 0, max_depth: int = 12) -> Any:
                 continue
             if key == "flamegraph":
                 summarised = flamegraph_summary(item)
+            elif key in CHART_GROUP_KEYS:
+                summarised = (
+                    [chart_group_summary(g) for g in item]
+                    if isinstance(item, list)
+                    else chart_group_summary(item)
+                )
             elif key in CHART_KEYS:
                 summarised = (
                     [chart_summary(c) for c in item]
@@ -156,8 +185,18 @@ def compact(value: Any, *, depth: int = 0, max_depth: int = 12) -> Any:
                 result[key] = summarised
         return result or None
     if isinstance(value, list):
-        items = [compact(v, depth=depth + 1, max_depth=max_depth) for v in value]
-        return [v for v in items if v is not None]
+        # Keep a placeholder for items that compact to nothing, so a count taken
+        # before compaction still matches the list that comes back.
+        items: list[Any] = []
+        for item in value:
+            compacted = compact(item, depth=depth + 1, max_depth=max_depth)
+            if compacted is None and isinstance(item, dict):
+                compacted = {}
+            elif compacted is None and isinstance(item, list):
+                compacted = []
+            if compacted is not None:
+                items.append(compacted)
+        return items
     if isinstance(value, str) and len(value) > MAX_STRING:
         return value[:MAX_STRING] + f"... <{len(value) - MAX_STRING} chars truncated>"
     return value
