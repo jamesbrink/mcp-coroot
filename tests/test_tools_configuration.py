@@ -1395,3 +1395,134 @@ async def test_dashboard_config_round_trips_unchanged(
     async with make_client(fake, settings) as client:
         result = await call(client, "get_dashboard", dashboard_id="d1")
     assert result["config"] == config
+
+
+async def test_get_application_defaults_to_the_diagnosis(
+    fake: FakeCoroot, settings: Settings
+) -> None:
+    # A full audit report set runs to tens of thousands of tokens, most of it
+    # chart summaries for checks that are passing.
+    reports = [
+        {
+            "name": f"Report{i}",
+            "status": "ok",
+            "checks": [{"title": f"check-{i}", "status": "ok"}],
+            "widgets": [
+                {"chart": {"series": [{"name": "s", "data": list(range(200))}]}}
+            ],
+        }
+        for i in range(10)
+    ]
+    reports[0]["status"] = "critical"
+    reports[0]["checks"] = [
+        {"title": "Latency", "status": "critical", "message": "p99 is 4s"}
+    ]
+    project(fake).on(
+        "GET",
+        "/api/project/p1/app/p1%3Ans%3ADeployment%3Aapi",
+        enveloped(
+            {"app_map": {"application": {"status": "critical"}}, "reports": reports}
+        ),
+    )
+    async with make_client(fake, settings) as client:
+        summary = await call(client, "get_application", app_id="ns:Deployment:api")
+        assert summary["failing_checks"] == [
+            {
+                "report": "Report0",
+                "check": "Latency",
+                "status": "critical",
+                "message": "p99 is 4s",
+            }
+        ]
+        assert len(summary["report_names"]) == 10
+        assert "reports" not in summary
+        assert "report=<name>" in summary["note"]
+
+        detail = await call(
+            client, "get_application", app_id="ns:Deployment:api", report="Report0"
+        )
+    assert [r["name"] for r in detail["reports"]] == ["Report0"]
+
+
+async def test_get_traces_ranks_and_limits(
+    fake: FakeCoroot, settings: Settings
+) -> None:
+    stats = [
+        {
+            "service_name": "svc",
+            "span_name": f"GET /{i}",
+            "total": 100,
+            "failed": i,
+            "duration_quantiles": [{"quantile": 0.99, "value": float(i)}],
+        }
+        for i in range(30)
+    ]
+    project(fake).on(
+        "GET",
+        "/api/project/p1/overview/traces",
+        enveloped({"traces": {"summary": {"stats": stats}}}),
+    )
+    async with make_client(fake, settings) as client:
+        by_errors = await call(client, "get_traces", limit=3)
+        assert by_errors["total_endpoints"] == 30
+        assert by_errors["omitted"] == 27
+        assert [e["span"] for e in by_errors["endpoints"]] == [
+            "GET /29",
+            "GET /28",
+            "GET /27",
+        ]
+        assert by_errors["endpoints"][0]["latency_seconds"] == {"p99": 29.0}
+
+        by_latency = await call(client, "get_traces", sort_by="latency", limit=1)
+    assert by_latency["endpoints"][0]["span"] == "GET /29"
+
+
+async def test_list_traces_bridges_summary_and_single_trace(
+    fake: FakeCoroot, settings: Settings
+) -> None:
+    project(fake).on(
+        "GET",
+        "/api/project/p1/overview/traces",
+        enveloped(
+            {
+                "traces": {
+                    "traces": [
+                        {
+                            "trace_id": "t1",
+                            "service": "checkout",
+                            "name": "POST /pay",
+                            "timestamp": 1704067200000,
+                            "duration": 4210.5,
+                            "status": {"error": True, "message": "upstream timeout"},
+                        }
+                    ]
+                }
+            }
+        ),
+    )
+    async with make_client(fake, settings) as client:
+        result = await call(
+            client, "list_traces", service="checkout", slower_than="1.5s", limit=5
+        )
+    trace = result["traces"][0]
+    assert trace["trace_id"] == "t1"
+    assert trace["duration_ms"] == 4210.5
+    assert trace["timestamp"] == "2024-01-01T00:00:00Z"
+    query = json.loads(dict(fake.last.url.params)["query"])
+    assert query["view"] == "traces"
+    assert query["dur_from"] == "1.5"
+
+
+async def test_list_traces_can_ask_for_errors_only(
+    fake: FakeCoroot, settings: Settings
+) -> None:
+    project(fake).on(
+        "GET",
+        "/api/project/p1/overview/traces",
+        enveloped({"traces": {"traces": []}}),
+    )
+    async with make_client(fake, settings) as client:
+        result = await call(client, "list_traces", errors_only=True)
+    # Coroot selects error traces with the 'inf' marker in the dur_from slot.
+    assert json.loads(dict(fake.last.url.params)["query"])["dur_from"] == "inf"
+    assert "No traces matched" in result["note"]

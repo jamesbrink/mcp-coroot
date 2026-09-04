@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from mcp.server.mcpserver import MCPServer
 from pydantic import Field
@@ -56,6 +56,37 @@ def _trace_filters(service: str | None, span: str | None) -> list[dict[str, str]
     if span:
         filters.append({"field": "SpanName", "op": "=", "value": span})
     return filters
+
+
+def _endpoint_digest(stat: dict[str, Any]) -> dict[str, Any]:
+    """Keep the numbers that rank an endpoint, drop its per-pod charts."""
+    total = stat.get("total") or 0
+    failed = stat.get("failed") or 0
+    quantiles = {
+        f"p{int(float(q.get('quantile', 0)) * 100)}": q.get("value")
+        for q in (stat.get("duration_quantiles") or [])
+        if isinstance(q, dict) and q.get("quantile") is not None
+    }
+    return {
+        "service": stat.get("service_name"),
+        "span": stat.get("span_name"),
+        "requests": total,
+        "failed": failed,
+        "error_rate": round(failed / total, 4) if total else None,
+        "latency_seconds": quantiles or None,
+    }
+
+
+def _endpoint_sort_key(kind: str) -> Any:
+    def key(entry: dict[str, Any]) -> float:
+        if kind == "errors":
+            return float(entry.get("failed") or 0)
+        if kind == "latency":
+            latency = entry.get("latency_seconds") or {}
+            return float(latency.get("p99") or latency.get("p95") or 0)
+        return float(entry.get("requests") or 0)
+
+    return key
 
 
 def _entry_digest(entry: dict[str, Any]) -> dict[str, Any]:
@@ -219,14 +250,22 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
         project_id: ProjectIdParam = None,
         service: ServiceParam = None,
         span: SpanParam = None,
+        sort_by: Annotated[
+            Literal["errors", "latency", "requests"],
+            Field(description="Which endpoints to rank first."),
+        ] = "errors",
+        limit: Annotated[
+            int, Field(description="Maximum endpoints to return.", ge=1, le=500)
+        ] = 20,
         from_time: FromParam = None,
         to_time: ToParam = None,
     ) -> dict[str, Any]:
         """Summarise distributed traces per endpoint: rate, errors and latency.
 
-        The first stop for "what is slow or failing?". Follow up with
-        get_trace_errors for failure reasons or get_trace_latency for the slow
-        tail. Requires ClickHouse in Coroot.
+        The first stop for "what is slow or failing?", ranked worst-first.
+        Latency quantiles are in SECONDS. Follow up with get_trace_errors for
+        failure reasons or get_trace_latency for the slow tail. Requires
+        ClickHouse in Coroot.
         """
         state, pid = await target(ctx, project_id)
         result = await state.coroot.overview.traces(
@@ -239,13 +278,21 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
         data = result.data if isinstance(result.data, dict) else {}
         summary = data.get("summary") or {}
         stats = summary.get("stats") if isinstance(summary, dict) else None
+        endpoints = [
+            _endpoint_digest(stat) for stat in (stats or []) if isinstance(stat, dict)
+        ]
+        endpoints.sort(key=_endpoint_sort_key(sort_by), reverse=True)
+        kept, omitted = limit_items(endpoints, limit)
         return respond(
             state,
             {
                 "project_id": pid,
                 "message": data.get("message") or None,
                 "error": data.get("error") or None,
-                "endpoints": compact(stats or []),
+                "total_endpoints": len(endpoints),
+                "omitted": omitted or None,
+                "sorted_by": sort_by,
+                "endpoints": kept,
                 "overall": compact(summary.get("overall"))
                 if isinstance(summary, dict)
                 else None,
@@ -264,7 +311,8 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
     ) -> dict[str, Any]:
         """List the top error reasons in traces, with a sample trace id for each.
 
-        Feed a sample trace id to get_trace to see the whole failing request.
+        Feed a sample trace id to get_trace to see the whole failing request,
+        or use list_traces to pick one yourself.
         """
         state, pid = await target(ctx, project_id)
         result = await state.coroot.overview.traces(
@@ -365,6 +413,80 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
                 else (
                     "No traces fell in this band. Lower slower_than or widen "
                     "the time window."
+                ),
+            },
+        )
+
+    @mcp.tool(title="List slow or failed traces", annotations=READ_ONLY)
+    @guard
+    async def list_traces(
+        ctx: ToolContext,
+        project_id: ProjectIdParam = None,
+        service: ServiceParam = None,
+        span: SpanParam = None,
+        slower_than: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Only traces at least this slow, e.g. '1s' or '500ms'. Sizes "
+                    "from get_traces are in seconds, so pass them with a unit."
+                )
+            ),
+        ] = None,
+        errors_only: Annotated[
+            bool, Field(description="Only traces that ended in an error.")
+        ] = False,
+        limit: Annotated[
+            int, Field(description="Maximum traces to return.", ge=1, le=100)
+        ] = 20,
+        from_time: FromParam = None,
+        to_time: ToParam = None,
+    ) -> dict[str, Any]:
+        """List individual traces, with the ids needed to open one.
+
+        The step between get_traces, which says an endpoint's p99 is bad, and
+        get_trace, which shows one request in full: this finds actual slow or
+        failed requests to look at. Requires ClickHouse in Coroot.
+        """
+        state, pid = await target(ctx, project_id)
+        dur_from = (
+            _seconds(parse_duration_ms(slower_than) / 1000) if slower_than else None
+        )
+        result = await state.coroot.overview.traces(
+            pid,
+            view="traces",
+            filters=_trace_filters(service, span),
+            dur_from="inf" if errors_only else dur_from,
+            from_=from_time,
+            to=to_time,
+        )
+        data = result.data if isinstance(result.data, dict) else {}
+        traces = [t for t in (data.get("traces") or []) if isinstance(t, dict)]
+        digests = [
+            {
+                "trace_id": t.get("trace_id") or t.get("id"),
+                "service": t.get("service"),
+                "name": t.get("name"),
+                "timestamp": ms_to_iso(t.get("timestamp")),
+                "duration_ms": t.get("duration"),
+                "status": t.get("status"),
+            }
+            for t in traces
+        ]
+        kept, omitted = limit_items(digests, limit)
+        return respond(
+            state,
+            {
+                "project_id": pid,
+                "message": data.get("message") or None,
+                "matched": len(digests),
+                "omitted": omitted or None,
+                "traces": kept,
+                "note": None
+                if kept
+                else (
+                    "No traces matched. Lower slower_than, widen the time range, "
+                    "or check get_traces for which endpoints have traffic."
                 ),
             },
         )

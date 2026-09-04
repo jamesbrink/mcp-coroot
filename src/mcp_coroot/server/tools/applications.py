@@ -120,11 +120,14 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
             ),
         ] = None,
     ) -> dict[str, Any]:
-        """Get one application's health: audit reports, failing checks and dependencies.
+        """Get one application's health: failing checks, dependencies and clients.
 
-        Each report covers one aspect (SLO, CPU, Memory, Postgres, Logs, ...) and
-        carries checks with their thresholds. Pass `report` to look at a single
-        aspect; the full response is large.
+        By default this returns the diagnosis — every failing check across every
+        audit report — plus the names of the reports available. That answers
+        "what is wrong with this application" without pulling the charts.
+
+        Pass `report` to read one report in full (SLO, CPU, Memory, Postgres,
+        Logs, Instances, Net, ...) when you need the numbers behind a check.
         """
         state, pid = await target(ctx, project_id)
         result = await state.coroot.applications.get(
@@ -159,27 +162,31 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
             for c in (r.get("checks") or [])
             if isinstance(c, dict) and c.get("status") in {"warning", "critical"}
         ]
-        return respond(
-            state,
-            {
-                "project_id": pid,
-                "application_id": normalize_app_id(app_id, project_id=pid),
-                "status": (application or {}).get("status"),
-                "indicators": (application or {}).get("indicators"),
-                "instances": app_map.get("instances")
-                if isinstance(app_map, dict)
-                else None,
-                "dependencies": app_map.get("dependencies")
-                if isinstance(app_map, dict)
-                else None,
-                "clients": app_map.get("clients")
-                if isinstance(app_map, dict)
-                else None,
-                "failing_checks": failing,
-                "report_names": [r.get("name") for r in (data.get("reports") or [])],
-                "reports": compact(reports),
-            },
-        )
+        payload: dict[str, Any] = {
+            "project_id": pid,
+            "application_id": normalize_app_id(app_id, project_id=pid),
+            "status": (application or {}).get("status"),
+            "indicators": (application or {}).get("indicators"),
+            "instances": app_map.get("instances")
+            if isinstance(app_map, dict)
+            else None,
+            "dependencies": app_map.get("dependencies")
+            if isinstance(app_map, dict)
+            else None,
+            "clients": app_map.get("clients") if isinstance(app_map, dict) else None,
+            "failing_checks": failing,
+            "report_names": [r.get("name") for r in (data.get("reports") or [])],
+        }
+        if report:
+            payload["reports"] = compact(reports)
+        else:
+            # Every report in full runs to tens of thousands of tokens, most of
+            # it chart summaries for checks that are already passing.
+            payload["note"] = (
+                "Showing failing checks only. Call get_application again with "
+                "report=<name> from report_names for one report's full detail."
+            )
+        return respond(state, payload)
 
     @mcp.tool(title="Get the service map", annotations=READ_ONLY)
     @guard

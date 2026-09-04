@@ -320,6 +320,12 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
         because Coroot replaces the whole category on save.
         """
         state, pid = await target(ctx, project_id)
+        if name == "application" and custom_patterns:
+            raise ToolError(
+                "'application' is Coroot's default category and matches whatever "
+                "no other category claims, so it cannot take patterns. Create a "
+                "category with its own name instead."
+            )
         # Coroot's save is a full replace: an omitted field is stored as empty.
         # Start from the current form so partial updates do not wipe the rest.
         form = await state.coroot.categories.get_form(pid, current_name or "")
