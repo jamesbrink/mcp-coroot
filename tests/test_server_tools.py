@@ -485,7 +485,7 @@ async def test_trace_latency_reduces_flamegraph(
             ),
         )
         result = await call(client, "get_trace_latency", slower_than="2s")
-        assert result["band"]["slower_than"] == "2s"
+        assert result["band"]["slower_than_seconds"] == 2.0
         assert result["hotspots"]["hottest"][0]["name"] == "db.query"
 
 
