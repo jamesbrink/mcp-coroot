@@ -1117,3 +1117,50 @@ async def test_incident_filters_scan_beyond_the_requested_limit(
             client, "list_incidents", app_id="p1:ns:Deployment:api", limit=5
         )
     assert by_app["matched"] == 2
+
+
+async def test_api_keys_tolerate_a_null_key_list(
+    fake: FakeCoroot, settings: Settings
+) -> None:
+    # Coroot has no omitempty on the key list, so a project without keys (every
+    # multicluster and config-file project) serialises it as null.
+    keys: list[dict[str, str]] = []
+
+    def get_keys(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, json={"editable": True, "keys": keys if keys else None}
+        )
+
+    def post_keys(request: httpx.Request) -> httpx.Response:
+        keys.append({"key": "k1", "description": fake.body(request)["description"]})
+        return httpx.Response(200)
+
+    project(fake).handle("GET", "/api/project/p1/api_keys", get_keys)
+    fake.handle("POST", "/api/project/p1/api_keys", post_keys)
+    async with make_client(fake, settings) as client:
+        listed = await call(client, "list_api_keys")
+        assert listed["keys"] == []
+
+        created = await call(client, "create_api_key", description="first")
+    assert created["key"] == "k1"
+
+
+async def test_health_check_does_not_need_credentials(fake: FakeCoroot) -> None:
+    # /health needs no auth, and the tool that distinguishes a connectivity
+    # problem from a credentials one must not fail at login.
+    bad = Settings(base_url="http://coroot.test", username="admin", password="wrong")
+    async with make_client(fake, bad) as client:
+        result = await call(client, "health_check")
+    assert result["healthy"] is True
+    assert [r.url.path for r in fake.requests] == ["/health"]
+
+
+async def test_unexpected_errors_are_reported_not_swallowed(
+    fake: FakeCoroot, settings: Settings
+) -> None:
+    # A bug in this server should still tell the model what happened.
+    project(fake).on("GET", "/api/project/p1/overview/nodes", enveloped({"nodes": 42}))
+    async with make_client(fake, settings) as client:
+        message = await call_error(client, "list_nodes")
+    assert "list_nodes failed unexpectedly" in message
+    assert "bug in mcp-coroot" in message
