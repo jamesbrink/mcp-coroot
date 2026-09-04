@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from .base import BaseAPI, JsonValue
+from .errors import CorootConnectionError, CorootError
 
 
 class AuthAPI(BaseAPI):
@@ -84,8 +85,15 @@ class SystemAPI(BaseAPI):
 
         Coroot serves this route without auth, so the probe must not log in
         first: otherwise bad credentials look like an unreachable instance.
+        Any HTTP answer other than 200 means "not this Coroot", which is an
+        answer rather than an error, so status errors are reported as ``False``.
         """
-        response = await self._t.request("GET", "/health", anonymous=True)
+        try:
+            response = await self._t.request("GET", "/health", anonymous=True)
+        except CorootConnectionError:
+            raise
+        except CorootError:
+            return False
         return response.status_code == 200
 
     async def sso(self) -> JsonValue:
