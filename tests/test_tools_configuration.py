@@ -281,16 +281,20 @@ async def test_db_instrumentation_read(fake: FakeCoroot, settings: Settings) -> 
 
 async def test_link_telemetry_service(fake: FakeCoroot, settings: Settings) -> None:
     project(fake)
-    fake.on("POST", "/api/project/p1/app/p1%3Ans%3ADeployment%3Aapi/tracing")
+    for stream in ("tracing", "profiling", "logs"):
+        fake.on("POST", f"/api/project/p1/app/p1%3Ans%3ADeployment%3Aapi/{stream}")
     async with make_client(fake, settings) as client:
-        await call(
-            client,
-            "link_telemetry_service",
-            app_id="ns:Deployment:api",
-            kind="tracing",
-            service="checkout",
-        )
-        assert fake.body(fake.last) == {"service": "checkout"}
+        for kind in ("tracing", "profiling", "logs"):
+            await call(
+                client,
+                "link_telemetry_service",
+                app_id="ns:Deployment:api",
+                kind=kind,
+                service="checkout",
+            )
+            # Each kind must reach its own endpoint, not another stream's.
+            assert fake.last_path.endswith(f"/{kind}")
+            assert fake.body(fake.last) == {"service": "checkout"}
 
         message = await call_error(
             client,
@@ -530,6 +534,13 @@ async def test_api_key_tools(fake: FakeCoroot, settings: Settings) -> None:
             client, "manage_api_key", action="create", description="ci"
         )
         assert created["key"] == "k2"
+
+        assert "description is required" in await call_error(
+            client, "manage_api_key", action="create"
+        )
+        assert "key is required" in await call_error(
+            client, "manage_api_key", action="delete"
+        )
 
         await call(client, "manage_api_key", action="delete", key="k2")
     assert [k["key"] for k in keys] == ["k1"]
