@@ -26,6 +26,7 @@ from .errors import (
     CorootUnsupportedError,
     error_from_status,
 )
+from .ids import encode_segment
 
 logger = logging.getLogger("mcp_coroot.client")
 
@@ -348,3 +349,18 @@ def decode_body(response: httpx.Response, path: str) -> JsonValue:
             detail=text[:200],
             path=path,
         ) from None
+
+
+class BaseAPI:
+    """Base class for the per-domain API groups."""
+
+    def __init__(self, transport: Transport) -> None:
+        self._t = transport
+
+    @staticmethod
+    def project_path(project_id: str, *segments: str) -> str:
+        """Build ``/api/project/{id}/...`` with each segment percent-encoded."""
+        if not project_id or not project_id.strip():
+            raise CorootError("project id must not be empty")
+        parts = [encode_segment(project_id.strip()), *segments]
+        return "/api/project/" + "/".join(parts)

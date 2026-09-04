@@ -9,6 +9,7 @@ them to what Coroot expects.
 from __future__ import annotations
 
 import re
+import time
 from datetime import UTC, datetime
 
 TimeInput = str | int | float | datetime | None
@@ -155,3 +156,24 @@ def ms_to_iso(value: int | float | None) -> str | None:
         .isoformat()
         .replace("+00:00", "Z")
     )
+
+
+def resolve_epoch_ms(
+    value: TimeInput, *, default: str = "now", now_ms: int | None = None
+) -> int:
+    """Resolve a time input to absolute epoch milliseconds.
+
+    Relative expressions are evaluated against ``now_ms`` (default: the current
+    time). Used for endpoints that need absolute timestamps, such as the
+    Prometheus-compatible query API.
+    """
+    text = to_coroot_time(value) or default
+    now = int(time.time() * 1000) if now_ms is None else now_ms
+    relative = _RELATIVE.match(text)
+    if relative:
+        sign, duration = relative.group(1), relative.group(2)
+        if sign is None:
+            return now
+        delta = parse_duration_ms(duration)
+        return now + delta if sign == "+" else now - delta
+    return int(text)
