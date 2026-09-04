@@ -64,6 +64,28 @@ specification. Configuration is unchanged; tool names are not.
   error.
 - Wrong credentials return 404 from Coroot, which is now reported as an
   authentication failure rather than a missing resource.
+- Trace latency bounds are sent as the float seconds Coroot parses. Go-style
+  durations resolved to zero, which selected no traces and left the server
+  diffing against a nil flame graph.
+- Updating one field of an application category no longer erases the others.
+  Coroot replaces the whole category on save, so patterns and notification
+  routing are read first and merged.
+- Charts inside a chart group survive summarisation. Audit reports are built
+  mostly from chart groups, so CPU, memory, JVM and GPU reports were arriving
+  with their series stripped.
+- A profile category is resolved to a concrete profile type before an instance
+  filter is applied; otherwise Coroot searched for a profile type named "cpu".
+- Alert and incident filters scan beyond a single server page, and the
+  application filter is pushed into Coroot's search. Asking for resolved alerts
+  previously returned an empty list next to a non-zero resolved count.
+- A project whose API key list serialises as null no longer breaks key
+  creation.
+- health_check probes without authenticating, so it can still tell a
+  connectivity problem from a credentials one.
+- Unexpected exceptions are reported with the tool name and exception type
+  instead of a bare "Error executing tool".
+- The output budget now holds for payloads that cannot be truncated, and
+  relative trace timestamp bounds are resolved before Coroot splits them.
 
 ## [0.1.1] - 2025-07-27
 
