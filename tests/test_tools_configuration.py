@@ -928,3 +928,85 @@ async def test_application_report_keeps_chart_group_numbers(
     group = result["reports"][0]["widgets"][0]["chart_group"]
     assert group["title"] == "CPU usage by instance, cores"
     assert group["charts"][0]["series"][0]["max"] == 1.5
+
+
+async def test_profile_category_with_instance_resolves_the_type(
+    fake: FakeCoroot, settings: Settings
+) -> None:
+    # Coroot resolves 'cpu' to a featured profile type only when the request
+    # carries no type, so an instance filter needs the concrete type first.
+    calls: list[str] = []
+
+    def profiling(request: httpx.Request) -> httpx.Response:
+        query = request.url.params.get("query", "")
+        calls.append(query)
+        return httpx.Response(
+            200,
+            json=enveloped(
+                {
+                    "status": "ok",
+                    "profile": {
+                        "type": "go:profile_cpu:nanoseconds",
+                        "flamegraph": {
+                            "name": "root",
+                            "total": 100,
+                            "children": [{"name": "compress", "total": 90}],
+                        },
+                    },
+                    "profiles": [{"type": "go:profile_cpu:nanoseconds", "name": "CPU"}],
+                }
+            ),
+        )
+
+    project(fake).handle(
+        "GET", "/api/project/p1/app/p1%3Ans%3ADeployment%3Aapi/profiling", profiling
+    )
+    import json
+
+    async with make_client(fake, settings) as client:
+        result = await call(
+            client,
+            "get_profile",
+            app_id="ns:Deployment:api",
+            profile="cpu",
+            instance="api-7d9f",
+        )
+    assert calls[0] == "cpu"
+    assert json.loads(calls[1]) == {
+        "type": "go:profile_cpu:nanoseconds",
+        "instance": "api-7d9f",
+    }
+    assert result["hotspots"]["hottest"][0]["name"] == "compress"
+    assert result["instance"] == "api-7d9f"
+
+
+async def test_profile_rejects_an_unknown_category(
+    fake: FakeCoroot, settings: Settings
+) -> None:
+    project(fake)
+    async with make_client(fake, settings) as client:
+        message = await call_error(
+            client, "get_profile", app_id="ns:Deployment:api", profile="gpu"
+        )
+    assert "profile must be one of" in message
+
+
+async def test_profile_reports_when_a_category_has_no_data(
+    fake: FakeCoroot, settings: Settings
+) -> None:
+    project(fake).on(
+        "GET",
+        "/api/project/p1/app/p1%3Ans%3ADeployment%3Aapi/profiling",
+        enveloped(
+            {"status": "warning", "message": "No profiles found", "profiles": []}
+        ),
+    )
+    async with make_client(fake, settings) as client:
+        result = await call(
+            client,
+            "get_profile",
+            app_id="ns:Deployment:api",
+            profile="memory",
+            instance="api-1",
+        )
+    assert "No profiles found" in result["message"]

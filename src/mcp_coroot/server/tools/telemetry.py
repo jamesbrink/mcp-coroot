@@ -17,6 +17,9 @@ from ..errors import guard
 from ..state import AppState, ToolContext
 from ._common import AppIdParam, FromParam, ProjectIdParam, ToParam, respond, target
 
+#: Profile categories Coroot resolves to a featured profile type.
+PROFILE_CATEGORIES: tuple[str, ...] = ("cpu", "memory", "lock")
+
 
 def _seconds(value: float) -> str:
     """Render a duration the way Coroot's heatmap parser expects: float seconds."""
@@ -424,14 +427,17 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
                 description=(
                     "'cpu', 'memory' or 'lock' for the featured profile of that "
                     "kind, or an exact profile type such as "
-                    "'go:profile_cpu:nanoseconds'."
+                    "'go:profile_cpu:nanoseconds' (see available_profiles in a "
+                    "previous response)."
                 )
             ),
         ] = "cpu",
         instance: Annotated[
             str | None,
             Field(
-                description="Limit to one instance (pod) name instead of the whole app."
+                description=(
+                    "Limit to one instance (pod) name instead of the whole application."
+                )
             ),
         ] = None,
         from_time: FromParam = None,
@@ -444,9 +450,40 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
         ClickHouse to be configured.
         """
         state, pid = await target(ctx, project_id)
-        query: str | dict[str, Any] = profile
-        if instance or ":" in profile:
-            query = {"type": profile, "instance": instance or ""}
+        wanted = profile.strip()
+        is_category = ":" not in wanted
+        if is_category and wanted not in PROFILE_CATEGORIES:
+            raise ValueError(
+                f"profile must be one of {', '.join(PROFILE_CATEGORIES)}, or an "
+                f"exact profile type containing ':' (got {profile!r})"
+            )
+
+        query: str | dict[str, Any] = wanted
+        if is_category and instance:
+            # Coroot only resolves a category to its featured profile type when
+            # the request carries no type at all, so an instance filter needs the
+            # concrete type. Ask for the category first to learn it.
+            probe = await state.coroot.applications.profiling(
+                pid, app_id, query=wanted, from_=from_time, to=to_time
+            )
+            probe_data = probe.data if isinstance(probe.data, dict) else {}
+            resolved = (probe_data.get("profile") or {}).get("type")
+            if not resolved:
+                return respond(
+                    state,
+                    {
+                        "project_id": pid,
+                        "application_id": normalize_app_id(app_id, project_id=pid),
+                        "status": probe_data.get("status"),
+                        "message": probe_data.get("message")
+                        or f"No {wanted} profiles found for this application",
+                        "available_profiles": probe_data.get("profiles"),
+                    },
+                )
+            query = {"type": resolved, "instance": instance}
+        elif not is_category:
+            query = {"type": wanted, "instance": instance or ""}
+
         result = await state.coroot.applications.profiling(
             pid, app_id, query=query, from_=from_time, to=to_time
         )
@@ -458,6 +495,7 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
             {
                 "project_id": pid,
                 "application_id": normalize_app_id(app_id, project_id=pid),
+                "instance": instance,
                 "status": data.get("status"),
                 "message": data.get("message") or None,
                 "profile_type": current.get("type")
