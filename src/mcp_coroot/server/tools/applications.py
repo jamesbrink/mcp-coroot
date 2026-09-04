@@ -88,7 +88,8 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
             state,
             {
                 "project_id": pid,
-                "total": len(apps),
+                "total_in_project": len(apps),
+                "matched": len(digests),
                 "returned": len(kept),
                 "omitted": omitted or None,
                 "by_status": status_counts(apps),

@@ -111,11 +111,27 @@ def test_fit_shrinks_long_strings() -> None:
 
 
 def test_fit_gives_up_when_shape_cannot_shrink() -> None:
-    # Wide dictionaries have nothing to truncate: keys are never dropped.
+    # Wide dictionaries have nothing to truncate: keys are never dropped. The
+    # budget must still hold, so the fallback reports only as many keys as fit.
     payload = {f"key-{i}": i for i in range(5_000)}
     result = fit(payload, 2_000)
     assert "could not be reduced" in result["truncated"]
+    assert encoded_size(result) <= 2_000
     assert result["keys"][0] == "key-0"
+    assert result["keys_omitted"] > 0
+    assert len(result["keys"]) + result["keys_omitted"] == 5_000
+
+
+def test_fit_holds_the_budget_for_every_shape() -> None:
+    budget = 1_500
+    shapes: list[dict[str, Any]] = [
+        {"items": [{"name": "x" * 100} for _ in range(500)]},
+        {"blob": "z" * 100_000},
+        {f"k{i}": {"nested": ["v"] * 50} for i in range(300)},
+        {"mixed": [{"a": "b" * 500}] * 50, "other": "c" * 5_000},
+    ]
+    for shape in shapes:
+        assert encoded_size(fit(shape, budget)) <= budget
 
 
 def test_status_counts_and_limit_items() -> None:
