@@ -40,6 +40,23 @@ NOISE_KEYS = frozenset(
 
 MAX_STRING = 2_000
 
+#: Keys never truncated by :func:`fit`. They are small, and they carry either the
+#: answer or the means to ask a better question.
+PROTECTED_KEYS = frozenset(
+    {
+        "failing_checks",
+        "report_names",
+        "available_profiles",
+        "truncated",
+        "note",
+        "message",
+        "error",
+        "totals",
+        "by_status",
+        "by_severity",
+    }
+)
+
 #: Marks an already-summarised chart so a second pass leaves it alone.
 CHART_NOTE = "chart data summarised; use get_metrics for raw samples"
 
@@ -54,7 +71,9 @@ def series_summary(data: Sequence[Any] | None) -> dict[str, Any] | None:
         return None
     numbers = _numbers(data)
     if not numbers:
-        return {"points": len(data), "values": None}
+        # Every sample is null: the target reported no data for the window,
+        # which is usually the thing the user is looking for.
+        return {"points": len(data), "values": "all null (no data in window)"}
     last = next((v for v in reversed(numbers)), None)
     return {
         "points": len(data),
@@ -65,16 +84,30 @@ def series_summary(data: Sequence[Any] | None) -> dict[str, Any] | None:
     }
 
 
+#: Keys a real Coroot Chart carries. A dict under a chart key with none of them
+#: is something else (a dashboard panel's display config, say) and is left alone.
+_CHART_FIELDS = frozenset({"ctx", "series", "title", "threshold", "annotations"})
+
+
 def chart_summary(chart: Any) -> Any:
     """Replace a Coroot chart with per-series statistics.
 
     Idempotent: summarising an already-summarised chart returns it unchanged, so
     nested payloads can be compacted more than once safely.
+
+    A bare list of numbers is a ``timeseries.TimeSeries``, which Coroot also
+    serialises under ``chart`` (table-cell sparklines, overview parameters), and
+    is summarised the same way.
     """
+    if isinstance(chart, list):
+        return series_summary(chart)
     if not isinstance(chart, dict):
         return chart
     if chart.get("note") == CHART_NOTE:
         return chart
+    if not _CHART_FIELDS & set(chart):
+        # Not a chart: a dashboard panel's {"display", "stacked"}, for instance.
+        return compact(chart)
     summary: dict[str, Any] = {}
     if title := chart.get("title"):
         summary["title"] = title
@@ -174,11 +207,7 @@ def compact(value: Any, *, depth: int = 0, max_depth: int = 12) -> Any:
                     else chart_group_summary(item)
                 )
             elif key in CHART_KEYS:
-                summarised = (
-                    [chart_summary(c) for c in item]
-                    if isinstance(item, list)
-                    else chart_summary(item)
-                )
+                summarised = chart_summary(item)
             else:
                 summarised = compact(item, depth=depth + 1, max_depth=max_depth)
             if summarised is not None:
@@ -219,7 +248,10 @@ def encoded_size(payload: Any) -> int:
 
 def _shrink(value: Any, list_limit: int, string_limit: int) -> Any:
     if isinstance(value, dict):
-        return {k: _shrink(v, list_limit, string_limit) for k, v in value.items()}
+        return {
+            k: (v if k in PROTECTED_KEYS else _shrink(v, list_limit, string_limit))
+            for k, v in value.items()
+        }
     if isinstance(value, list):
         kept = [_shrink(v, list_limit, string_limit) for v in value[:list_limit]]
         dropped = len(value) - len(kept)
@@ -264,12 +296,18 @@ def fit(payload: dict[str, Any], max_chars: int) -> dict[str, Any]:
     )
     keys = sorted(payload)
     shown: list[str] = []
-    used = encoded_size({"truncated": note, "keys": [], "keys_omitted": len(keys)})
     for key in keys:
-        used += len(key) + 4  # the key, its quotes and a separator
-        if used > max_chars:
+        # Measure the encoded result rather than estimating it: a non-ASCII key
+        # is six characters per character once json.dumps escapes it.
+        candidate = [*shown, key]
+        probe = {
+            "truncated": note,
+            "keys": candidate,
+            "keys_omitted": len(keys) - len(candidate),
+        }
+        if encoded_size(probe) > max_chars:
             break
-        shown.append(key)
+        shown = candidate
     return {
         "truncated": note,
         "keys": shown,

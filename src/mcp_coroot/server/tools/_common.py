@@ -62,11 +62,20 @@ async def target(ctx: ToolContext, project_id: str | None) -> tuple[AppState, st
     return state, await state.resolve_project(project_id)
 
 
-def respond(state: AppState, payload: dict[str, Any]) -> dict[str, Any]:
-    """Summarise and budget a tool response."""
-    compacted = compact(payload)
-    result = compacted if isinstance(compacted, dict) else {"data": compacted}
-    return fit(result, state.settings.max_output_chars)
+def respond(
+    state: AppState, payload: dict[str, Any], *, summarise: bool = True
+) -> dict[str, Any]:
+    """Summarise and budget a tool response.
+
+    ``summarise=False`` keeps the payload verbatim and only enforces the
+    character budget. Use it for configuration a caller has to send back
+    unchanged: the summarising pass drops presentation fields, which are exactly
+    the settings in a saved dashboard panel.
+    """
+    if summarise:
+        compacted = compact(payload)
+        payload = compacted if isinstance(compacted, dict) else {"data": compacted}
+    return fit(payload, state.settings.max_output_chars)
 
 
 def ok(message: str, **fields: Any) -> dict[str, Any]:

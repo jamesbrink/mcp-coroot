@@ -1354,3 +1354,40 @@ def test_base_url_must_not_carry_credentials() -> None:
     # output and tool responses.
     with pytest.raises(ConfigError, match="must not embed credentials"):
         Settings(base_url="https://admin:hunter2@coroot.example.com")
+
+
+async def test_dashboard_config_round_trips_unchanged(
+    fake: FakeCoroot, settings: Settings
+) -> None:
+    # update_dashboard_panels tells the model to read a dashboard and send the
+    # modified version back, so get_dashboard must not strip panel settings.
+    config = {
+        "groups": [
+            {
+                "name": "Latency",
+                "collapsed": False,
+                "panels": [
+                    {
+                        "name": "p99",
+                        "source": {
+                            "metrics": {
+                                "queries": [
+                                    {"query": "up", "legend": "{{i}}", "color": "red"}
+                                ]
+                            }
+                        },
+                        "widget": {"chart": {"display": "line", "stacked": True}},
+                        "box": {"x": 0, "y": 0, "w": 12, "h": 6},
+                    }
+                ],
+            }
+        ]
+    }
+    project(fake).on(
+        "GET",
+        "/api/project/p1/dashboards/d1",
+        enveloped({"id": "d1", "name": "Redis", "config": config}),
+    )
+    async with make_client(fake, settings) as client:
+        result = await call(client, "get_dashboard", dashboard_id="d1")
+    assert result["config"] == config

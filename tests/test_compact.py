@@ -27,7 +27,11 @@ def test_series_summary() -> None:
     }
     assert series_summary([]) is None
     assert series_summary(None) is None
-    assert series_summary([None, None]) == {"points": 2, "values": None}
+    # An all-null series means the target reported nothing, which is signal.
+    assert series_summary([None, None]) == {
+        "points": 2,
+        "values": "all null (no data in window)",
+    }
 
 
 def test_chart_summary_keeps_signal() -> None:
@@ -124,11 +128,13 @@ def test_fit_gives_up_when_shape_cannot_shrink() -> None:
 
 def test_fit_holds_the_budget_for_every_shape() -> None:
     budget = 1_500
+    # Non-ASCII keys encode to six characters each, so estimating is not enough.
     shapes: list[dict[str, Any]] = [
         {"items": [{"name": "x" * 100} for _ in range(500)]},
         {"blob": "z" * 100_000},
         {f"k{i}": {"nested": ["v"] * 50} for i in range(300)},
         {"mixed": [{"a": "b" * 500}] * 50, "other": "c" * 5_000},
+        {f"\u30ad\u30fc{i}" * 5: i for i in range(400)},
     ]
     for shape in shapes:
         assert encoded_size(fit(shape, budget)) <= budget
@@ -187,3 +193,39 @@ def test_list_items_that_compact_to_nothing_are_kept() -> None:
     result = compact({"items": items})
     assert len(result["items"]) == 3
     assert result["items"][1] == {}
+
+
+def test_a_dict_under_chart_that_is_not_a_chart_is_left_alone() -> None:
+    # A dashboard panel's widget is {"chart": {"display", "stacked"}}, which is
+    # not a Coroot Chart and must not be summarised into nothing.
+    result = compact({"widget": {"chart": {"display": "line", "kind": "area"}}})
+    assert result["widget"]["chart"] == {"display": "line", "kind": "area"}
+
+
+def test_bare_series_under_a_chart_key_is_summarised() -> None:
+    # timeseries.TimeSeries serialises as a plain array of floats, and Coroot
+    # puts one under "chart" in table cells and overview parameters.
+    result = compact({"chart": [1.0, 5.0, 3.0]})
+    assert result["chart"] == {
+        "points": 3,
+        "last": 3.0,
+        "min": 1.0,
+        "max": 5.0,
+        "avg": 3.0,
+    }
+
+
+def test_fit_protects_the_fields_that_carry_the_answer() -> None:
+    payload = {
+        "failing_checks": [
+            {"check": f"check-{i}", "status": "critical"} for i in range(30)
+        ],
+        "report_names": [f"Report{i}" for i in range(11)],
+        "reports": [{"name": f"R{i}", "blob": "x" * 400} for i in range(40)],
+    }
+    result = fit(payload, 6_000)
+    assert encoded_size(result) <= 6_000
+    # The diagnosis and the means to ask a narrower question both survive.
+    assert len(result["failing_checks"]) == 30
+    assert len(result["report_names"]) == 11
+    assert "more items omitted" in str(result["reports"][-1])
