@@ -89,6 +89,17 @@ def guard(fn: Callable[P, Awaitable[R]]) -> Callable[P, Awaitable[R]]:
             )
             logger.log(level, "%s failed: %s", fn.__name__, exc)
             raise ToolError(describe(exc)) from exc
+        except Exception as exc:
+            # A bug in this server, not something the caller did. Log the
+            # traceback and tell the model plainly, rather than leaving the SDK
+            # to report a bare "Error executing tool".
+            logger.exception(
+                "%s raised an unexpected %s", fn.__name__, type(exc).__name__
+            )
+            raise ToolError(
+                f"{fn.__name__} failed unexpectedly ({type(exc).__name__}). "
+                "This is a bug in mcp-coroot; the server log has the traceback."
+            ) from exc
 
     return wrapper
 

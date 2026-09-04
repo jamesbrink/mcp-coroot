@@ -60,9 +60,18 @@ class ProjectsAPI(BaseAPI):
     # -- API keys -------------------------------------------------------------
 
     async def api_keys(self, project_id: str) -> dict[str, Any]:
-        """``{"editable": bool, "keys": [{"key", "description"}]}``."""
+        """``{"editable": bool, "keys": [{"key", "description"}]}``.
+
+        Coroot serialises an unset key list as ``null`` (multicluster and
+        config-file projects never get a default key), so ``keys`` is normalised
+        to a list here.
+        """
         data = await self._t.get(self.project_path(project_id, "api_keys"))
-        return data if isinstance(data, dict) else {"editable": False, "keys": []}
+        if not isinstance(data, dict):
+            return {"editable": False, "keys": []}
+        keys = data.get("keys")
+        data["keys"] = [k for k in keys if isinstance(k, dict)] if keys else []
+        return data
 
     async def generate_api_key(
         self, project_id: str, description: str
