@@ -881,3 +881,50 @@ async def test_trace_latency_rejects_an_empty_band(
         )
     assert "greater than zero" in zero
     assert "must be greater than slower_than" in inverted
+
+
+async def test_application_report_keeps_chart_group_numbers(
+    fake: FakeCoroot, settings: Settings
+) -> None:
+    # Audit reports carry their series inside chart groups; get_application must
+    # not reduce those to a bare title.
+    project(fake).on(
+        "GET",
+        "/api/project/p1/app/p1%3Ans%3ADeployment%3Aapi",
+        enveloped(
+            {
+                "app_map": {
+                    "application": {"id": "p1:ns:Deployment:api", "status": "warning"}
+                },
+                "reports": [
+                    {
+                        "name": "CPU",
+                        "status": "warning",
+                        "checks": [],
+                        "widgets": [
+                            {
+                                "chart_group": {
+                                    "title": "CPU usage by instance, cores",
+                                    "charts": [
+                                        {
+                                            "title": "api-1",
+                                            "series": [
+                                                {"name": "usage", "data": [0.5, 1.5]}
+                                            ],
+                                        }
+                                    ],
+                                }
+                            }
+                        ],
+                    }
+                ],
+            }
+        ),
+    )
+    async with make_client(fake, settings) as client:
+        result = await call(
+            client, "get_application", app_id="ns:Deployment:api", report="CPU"
+        )
+    group = result["reports"][0]["widgets"][0]["chart_group"]
+    assert group["title"] == "CPU usage by instance, cores"
+    assert group["charts"][0]["series"][0]["max"] == 1.5
