@@ -9,6 +9,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import Field
 
 from ...client.applications import CHECK_IDS, INSTRUMENTATION_DEFAULT_PORTS
+from ...client.configuration import INTEGRATION_TYPES
 from ...client.ids import PROJECT_SCOPE_APP_ID, normalize_app_id
 from ...config import Settings
 from ..app import DESTRUCTIVE, READ_ONLY, WRITE
@@ -59,19 +60,48 @@ ScopeAppParam = Annotated[
 
 
 def register(mcp: MCPServer[AppState], settings: Settings) -> None:
-    @mcp.tool(title="List inspection checks", annotations=READ_ONLY)
+    @mcp.tool(title="Get inspection checks", annotations=READ_ONLY)
     @guard
-    async def list_inspections(
-        ctx: ToolContext, project_id: ProjectIdParam = None
+    async def get_inspections(
+        ctx: ToolContext,
+        project_id: ProjectIdParam = None,
+        check_id: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Return one check's configuration in full, e.g. "
+                    "'CPUContainer' or 'SLOLatency'. Omit to list every check "
+                    "with its thresholds."
+                )
+            ),
+        ] = None,
+        app_id: ScopeAppParam = None,
     ) -> dict[str, Any]:
-        """List Coroot's health checks with their thresholds and any overrides.
+        """List Coroot's health checks, or read one check's configuration.
 
-        Shows the built-in threshold, the project-wide override and per
-        application overrides for each check.
+        The listing shows each check's built-in threshold, the project-wide
+        override and any per-application overrides. For one check, the configs
+        are positional: index 0 is Coroot's default, 1 the project override and
+        2 the application override, with null meaning "not set".
         """
         state, pid = await target(ctx, project_id)
+        if check_id:
+            scope = app_id or PROJECT_SCOPE_APP_ID
+            data = await state.coroot.applications.get_inspection_config(
+                pid, scope, one_of(check_id, CHECK_IDS, name="check_id")
+            )
+            return respond(
+                state,
+                {
+                    "project_id": pid,
+                    "check_id": check_id,
+                    "scope": "project" if scope == PROJECT_SCOPE_APP_ID else scope,
+                    **data,
+                },
+            )
+
         result = await state.coroot.inspections.list(pid)
-        data = result.data if isinstance(result.data, dict) else {}
+        listing = result.data if isinstance(result.data, dict) else {}
         checks = [
             {
                 "id": c.get("id"),
@@ -82,100 +112,89 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
                 "project_threshold": c.get("project_threshold"),
                 "application_overrides": c.get("application_overrides"),
             }
-            for c in (data.get("checks") or [])
+            for c in (listing.get("checks") or [])
             if isinstance(c, dict)
         ]
         return respond(
             state, {"project_id": pid, "count": len(checks), "checks": checks}
         )
 
-    @mcp.tool(title="Get an inspection's configuration", annotations=READ_ONLY)
+    @mcp.tool(title="Get project configuration", annotations=READ_ONLY)
     @guard
-    async def get_inspection_config(
+    async def get_project_config(
         ctx: ToolContext,
-        check_id: CheckIdParam,
-        project_id: ProjectIdParam = None,
-        app_id: ScopeAppParam = None,
-    ) -> dict[str, Any]:
-        """Get the threshold or SLO definition for one check.
-
-        For simple checks the configs are positional: index 0 is Coroot's default,
-        1 the project override and 2 the application override, with null meaning
-        "not set".
-        """
-        state, pid = await target(ctx, project_id)
-        scope = app_id or PROJECT_SCOPE_APP_ID
-        data = await state.coroot.applications.get_inspection_config(
-            pid, scope, one_of(check_id, CHECK_IDS, name="check_id")
-        )
-        return respond(
-            state,
-            {
-                "project_id": pid,
-                "check_id": check_id,
-                "scope": "project" if scope == PROJECT_SCOPE_APP_ID else scope,
-                **data,
-            },
-        )
-
-    @mcp.tool(title="List application categories", annotations=READ_ONLY)
-    @guard
-    async def list_application_categories(
-        ctx: ToolContext, project_id: ProjectIdParam = None
-    ) -> dict[str, Any]:
-        """List application categories with their patterns and notification routing."""
-        state, pid = await target(ctx, project_id)
-        categories = await state.coroot.categories.list(pid)
-        return respond(
-            state,
-            {"project_id": pid, "count": len(categories), "categories": categories},
-        )
-
-    @mcp.tool(title="List custom applications", annotations=READ_ONLY)
-    @guard
-    async def list_custom_applications(
-        ctx: ToolContext, project_id: ProjectIdParam = None
-    ) -> dict[str, Any]:
-        """List custom application definitions that group instances by pattern."""
-        state, pid = await target(ctx, project_id)
-        apps = await state.coroot.custom_applications.list(pid)
-        return respond(
-            state, {"project_id": pid, "count": len(apps), "custom_applications": apps}
-        )
-
-    @mcp.tool(title="List integrations", annotations=READ_ONLY)
-    @guard
-    async def list_integrations(
-        ctx: ToolContext, project_id: ProjectIdParam = None
-    ) -> dict[str, Any]:
-        """List notification integrations and which events each one receives.
-
-        Metrics and data-source integrations (Prometheus, ClickHouse, AWS) are not
-        listed here; read them with get_integration.
-        """
-        state, pid = await target(ctx, project_id)
-        data = await state.coroot.integrations.list(pid)
-        return respond(state, {"project_id": pid, **data})
-
-    @mcp.tool(title="Get an integration's configuration", annotations=READ_ONLY)
-    @guard
-    async def get_integration(
-        ctx: ToolContext,
-        integration_type: IntegrationTypeParam,
+        section: Annotated[
+            Literal["categories", "custom_applications", "pricing", "instance"],
+            Field(
+                description=(
+                    "categories: application categories, their patterns and "
+                    "notification routing. custom_applications: instance groups "
+                    "Coroot did not detect on its own. pricing: the per-core and "
+                    "per-GB rates used for cost estimates. instance: the Coroot "
+                    "instance's SSO, AI and Coroot Cloud settings."
+                )
+            ),
+        ],
         project_id: ProjectIdParam = None,
     ) -> dict[str, Any]:
-        """Get one integration's settings, with its credentials redacted.
+        """Read one section of a project's configuration."""
+        state = context(ctx)
+        if section == "instance":
+            return respond(
+                state,
+                {
+                    "sso": await state.coroot.system.sso(),
+                    "ai": await state.coroot.system.ai(),
+                    "cloud": await state.coroot.system.cloud_status(),
+                    "base_url": state.settings.base_url,
+                },
+            )
 
-        Coroot returns tokens, keys and passwords in clear to any account that
-        may edit integrations, so this server redacts them rather than copying
-        them into the conversation. Set COROOT_REVEAL_SECRETS to read them.
+        pid = await state.resolve_project(project_id)
+        if section == "categories":
+            categories = await state.coroot.categories.list(pid)
+            return respond(
+                state,
+                {"project_id": pid, "count": len(categories), "categories": categories},
+            )
+        if section == "custom_applications":
+            apps = await state.coroot.custom_applications.list(pid)
+            return respond(
+                state,
+                {"project_id": pid, "count": len(apps), "custom_applications": apps},
+            )
+        pricing = await state.coroot.cloud_pricing.get(pid)
+        return respond(state, {"project_id": pid, **pricing})
+
+    @mcp.tool(title="Get integrations", annotations=READ_ONLY)
+    @guard
+    async def get_integrations(
+        ctx: ToolContext,
+        project_id: ProjectIdParam = None,
+        integration_type: Annotated[
+            IntegrationType | None,
+            Field(
+                description=(
+                    "Return one integration's settings. Omit to list the "
+                    "notification integrations and which events each receives."
+                )
+            ),
+        ] = None,
+    ) -> dict[str, Any]:
+        """List notification integrations, or read one integration's settings.
+
+        The listing covers the notification types only; name a type to read any
+        integration, data sources included. Credentials come back redacted,
+        because Coroot returns them in clear to accounts that may edit them.
         """
         state, pid = await target(ctx, project_id)
-        kind = integration_type
-        data = await state.coroot.integrations.get(pid, kind)
-        payload = data if isinstance(data, dict) else {"value": data}
-        safe = redact_secrets(payload, reveal=state.settings.reveal_secrets)
-        return respond(state, {"project_id": pid, "type": kind, **safe})
+        if integration_type:
+            data = await state.coroot.integrations.get(pid, integration_type)
+            payload = data if isinstance(data, dict) else {"value": data}
+            safe = redact_secrets(payload, reveal=state.settings.reveal_secrets)
+            return respond(state, {"project_id": pid, "type": integration_type, **safe})
+        listed = await state.coroot.integrations.list(pid)
+        return respond(state, {"project_id": pid, **listed})
 
     @mcp.tool(title="Get database instrumentation", annotations=READ_ONLY)
     @guard
@@ -205,39 +224,7 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
             },
         )
 
-    @mcp.tool(title="Get cloud pricing", annotations=READ_ONLY)
-    @guard
-    async def get_cloud_pricing(
-        ctx: ToolContext, project_id: ProjectIdParam = None
-    ) -> dict[str, Any]:
-        """Get the per-core and per-GB hourly prices used for cost estimates."""
-        state, pid = await target(ctx, project_id)
-        data = await state.coroot.cloud_pricing.get(pid)
-        return respond(state, {"project_id": pid, **data})
-
-    @mcp.tool(title="Get instance-wide settings", annotations=READ_ONLY)
-    @guard
-    async def get_server_settings(ctx: ToolContext) -> dict[str, Any]:
-        """Get the Coroot instance's SSO, AI and Coroot Cloud configuration.
-
-        SSO and AI provider settings are Enterprise features and read back empty
-        on Community Edition.
-        """
-        state = context(ctx)
-        sso = await state.coroot.system.sso()
-        ai = await state.coroot.system.ai()
-        cloud = await state.coroot.system.cloud_status()
-        return respond(
-            state,
-            {
-                "sso": sso,
-                "ai": ai,
-                "cloud": cloud,
-                "base_url": state.settings.base_url,
-            },
-        )
-
-    if settings.read_only or not settings.enabled("config"):
+    if settings.read_only:
         return
 
     @mcp.tool(title="Set an inspection threshold", annotations=WRITE)
@@ -339,18 +326,6 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
         await state.coroot.categories.save(pid, form)
         return ok(f"Saved category {name!r}", project_id=pid, name=name)
 
-    @mcp.tool(title="Delete an application category", annotations=DESTRUCTIVE)
-    @guard
-    async def delete_application_category(
-        ctx: ToolContext,
-        name: Annotated[str, Field(description="Category name to delete.")],
-        project_id: ProjectIdParam = None,
-    ) -> dict[str, Any]:
-        """Delete a custom application category. Built-in categories are kept."""
-        state, pid = await target(ctx, project_id)
-        await state.coroot.categories.delete(pid, name)
-        return ok(f"Deleted category {name!r}", project_id=pid, name=name)
-
     @mcp.tool(title="Create or update a custom application", annotations=WRITE)
     @guard
     async def save_custom_application(
@@ -380,17 +355,40 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
         )
         return ok(f"Saved custom application {name!r}", project_id=pid, name=name)
 
-    @mcp.tool(title="Delete a custom application", annotations=DESTRUCTIVE)
+    @mcp.tool(title="Delete part of a project's configuration", annotations=DESTRUCTIVE)
     @guard
-    async def delete_custom_application(
+    async def delete_project_config(
         ctx: ToolContext,
-        name: Annotated[str, Field(description="Custom application name to delete.")],
+        section: Annotated[
+            Literal["category", "custom_application", "integration"],
+            Field(description="What kind of object to remove."),
+        ],
+        name: Annotated[
+            str,
+            Field(
+                description=(
+                    "The category name, custom application name, or integration "
+                    "type to remove."
+                )
+            ),
+        ],
         project_id: ProjectIdParam = None,
     ) -> dict[str, Any]:
-        """Delete a custom application definition."""
+        """Remove an application category, a custom application or an integration.
+
+        Coroot's built-in categories are kept whatever this asks. Prometheus
+        cannot be removed: a project always needs a metrics source, so replace it
+        with configure_integration instead.
+        """
         state, pid = await target(ctx, project_id)
-        await state.coroot.custom_applications.delete(pid, name)
-        return ok(f"Deleted custom application {name!r}", project_id=pid, name=name)
+        if section == "category":
+            await state.coroot.categories.delete(pid, name)
+        elif section == "custom_application":
+            await state.coroot.custom_applications.delete(pid, name)
+        else:
+            kind = one_of(name, INTEGRATION_TYPES, name="name")
+            await state.coroot.integrations.delete(pid, kind)
+        return ok(f"Deleted {section} {name!r}", project_id=pid)
 
     @mcp.tool(title="Configure an integration", annotations=WRITE)
     @guard
@@ -444,23 +442,6 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
             return ok(f"{kind} integration test succeeded", project_id=pid, type=kind)
         await state.coroot.integrations.save(pid, kind, config)
         return ok(f"Configured {kind} integration", project_id=pid, type=kind)
-
-    @mcp.tool(title="Delete an integration", annotations=DESTRUCTIVE)
-    @guard
-    async def delete_integration(
-        ctx: ToolContext,
-        integration_type: IntegrationTypeParam,
-        project_id: ProjectIdParam = None,
-    ) -> dict[str, Any]:
-        """Remove an integration.
-
-        Prometheus cannot be removed this way: a project always needs a metrics
-        source. Replace it with configure_integration instead.
-        """
-        state, pid = await target(ctx, project_id)
-        kind = integration_type
-        await state.coroot.integrations.delete(pid, kind)
-        return ok(f"Deleted {kind} integration", project_id=pid, type=kind)
 
     @mcp.tool(title="Configure database instrumentation", annotations=WRITE)
     @guard

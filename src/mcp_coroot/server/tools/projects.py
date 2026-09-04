@@ -2,138 +2,118 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import Field
 
+from ...client import CorootError
 from ...config import Settings
-from ..app import CREATE, DESTRUCTIVE, READ_ONLY, WRITE
+from ..app import DESTRUCTIVE, READ_ONLY, WRITE
 from ..errors import guard
 from ..state import AppState, ToolContext
 from ._common import ProjectIdParam, context, ok, respond, target
 
 
 def register(mcp: MCPServer[AppState], settings: Settings) -> None:
-    @mcp.tool(title="Check Coroot connectivity", annotations=READ_ONLY)
+    @mcp.tool(title="Check the Coroot connection", annotations=READ_ONLY)
     @guard
-    async def health_check(ctx: ToolContext) -> dict[str, Any]:
-        """Check that the configured Coroot instance is reachable.
+    async def get_connection(ctx: ToolContext) -> dict[str, Any]:
+        """Check that Coroot is reachable and see who this server is.
 
-        Use this first when other tools fail, to tell a connectivity or
-        credentials problem apart from a Coroot-side one.
+        Start here when other tools fail: it separates a connectivity problem
+        from a credentials one, and reports the role, which decides what will be
+        allowed. Reachability is probed without authenticating, so it answers
+        even when the credentials are wrong.
         """
         state = context(ctx)
         healthy = await state.coroot.system.health()
-        return {
+        payload: dict[str, Any] = {
             "healthy": healthy,
             "base_url": state.settings.base_url,
             "auth_mode": state.settings.auth_mode,
             "read_only": state.settings.read_only,
+            "toolsets": sorted(state.settings.toolsets),
         }
+        if healthy:
+            try:
+                user = await state.coroot.auth.current_user()
+            except CorootError as exc:
+                payload["authenticated"] = False
+                payload["auth_error"] = str(exc)
+            else:
+                payload["authenticated"] = True
+                payload["user"] = {
+                    "email": user.get("email"),
+                    "name": user.get("name"),
+                    "role": user.get("role"),
+                    "anonymous": bool(user.get("anonymous")),
+                }
+                payload["projects"] = user.get("projects") or []
+        return respond(state, payload)
 
-    @mcp.tool(title="Show the current user", annotations=READ_ONLY)
+    @mcp.tool(title="Get projects", annotations=READ_ONLY)
     @guard
-    async def whoami(ctx: ToolContext) -> dict[str, Any]:
-        """Show the authenticated Coroot user, their role and their projects.
-
-        A permission error from another tool usually means this user's role is
-        too narrow.
-        """
-        state = context(ctx)
-        user = await state.coroot.auth.current_user()
-        return respond(
-            state,
-            {
-                "email": user.get("email"),
-                "name": user.get("name"),
-                "role": user.get("role"),
-                "anonymous": bool(user.get("anonymous")),
-                "readonly": bool(user.get("readonly")),
-                "projects": user.get("projects") or [],
-            },
-        )
-
-    @mcp.tool(title="List projects", annotations=READ_ONLY)
-    @guard
-    async def list_projects(ctx: ToolContext) -> dict[str, Any]:
-        """List the Coroot projects (clusters) this account can see.
-
-        Call this before anything that needs a project_id.
-        """
-        state = context(ctx)
-        projects = await state.project_choices(refresh=True)
-        return respond(
-            state,
-            {
-                "projects": projects,
-                "count": len(projects),
-                "default_project": state.settings.default_project,
-            },
-        )
-
-    @mcp.tool(title="Get project settings", annotations=READ_ONLY)
-    @guard
-    async def get_project(
-        ctx: ToolContext, project_id: ProjectIdParam = None
+    async def get_projects(
+        ctx: ToolContext,
+        project_id: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Report one project in detail: its settings, whether it is "
+                    "collecting telemetry, and its ingestion keys. Omit to list "
+                    "the projects this account can see."
+                )
+            ),
+        ] = None,
     ) -> dict[str, Any]:
-        """Get a project's settings: name, refresh interval and API keys.
+        """List Coroot projects, or report one in detail.
 
-        API key values are hidden unless the account may edit project settings.
+        A project is a cluster. Call this before anything needing a project_id.
+        The detail view is also the way to tell whether a project is receiving
+        data at all: a prometheus action of 'configure' means no metrics source
+        is set up, and 'wait' means the cache is still filling.
         """
-        state, pid = await target(ctx, project_id)
+        state = context(ctx)
+        if not project_id:
+            projects = await state.project_choices(refresh=True)
+            return respond(
+                state,
+                {
+                    "projects": projects,
+                    "count": len(projects),
+                    "default_project": state.settings.default_project,
+                },
+            )
+
+        pid = await state.resolve_project(project_id)
         project = await state.coroot.projects.get(pid)
-        return respond(state, {"id": pid, **project})
-
-    @mcp.tool(title="Get project health", annotations=READ_ONLY)
-    @guard
-    async def get_project_status(
-        ctx: ToolContext, project_id: ProjectIdParam = None
-    ) -> dict[str, Any]:
-        """Check whether a project is actually collecting telemetry.
-
-        Reports the metrics source (Prometheus or ClickHouse), the node agent and
-        kube-state-metrics. Use it when other tools return empty data: a
-        prometheus action of 'configure' means no metrics source is set up, and
-        'wait' means the cache is still filling.
-        """
-        state, pid = await target(ctx, project_id)
-        result = await state.coroot.projects.status(pid)
-        data = result.data if isinstance(result.data, dict) else {}
-        return respond(
-            state,
-            {
-                "project_id": pid,
+        status = await state.coroot.projects.status(pid)
+        data = status.data if isinstance(status.data, dict) else {}
+        payload: dict[str, Any] = {
+            "id": pid,
+            **project,
+            "telemetry": {
                 "status": data.get("status"),
                 "error": data.get("error") or None,
                 "prometheus": data.get("prometheus"),
                 "node_agent": data.get("node_agent"),
                 "kube_state_metrics": data.get("kube_state_metrics"),
-                "open_incidents": result.context.get("incidents") or {},
-                "firing_alerts": result.context.get("alerts") or {},
             },
-        )
+            "open_incidents": status.context.get("incidents") or {},
+            "firing_alerts": status.context.get("alerts") or {},
+        }
+        if settings.enabled("admin"):
+            payload["api_keys"] = await state.coroot.projects.api_keys(pid)
+        return respond(state, payload)
 
-    @mcp.tool(title="List project API keys", annotations=READ_ONLY)
-    @guard
-    async def list_api_keys(
-        ctx: ToolContext, project_id: ProjectIdParam = None
-    ) -> dict[str, Any]:
-        """List a project's telemetry ingestion API keys.
-
-        Key values are only returned to accounts that may edit project settings.
-        """
-        state, pid = await target(ctx, project_id)
-        keys = await state.coroot.projects.api_keys(pid)
-        return respond(state, {"project_id": pid, **keys})
-
-    # Creating and deleting projects and keys is administration.
     if settings.read_only or not settings.enabled("admin"):
         return
 
-    @mcp.tool(title="Create a project", annotations=WRITE)
+    @mcp.tool(title="Create or rename a project", annotations=WRITE)
     @guard
-    async def create_project(
+    async def save_project(
         ctx: ToolContext,
         name: Annotated[
             str,
@@ -144,6 +124,10 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
                 )
             ),
         ],
+        project_id: Annotated[
+            str | None,
+            Field(description="Rename this project instead of creating one."),
+        ] = None,
         member_projects: Annotated[
             list[str] | None,
             Field(
@@ -154,36 +138,23 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
             ),
         ] = None,
     ) -> dict[str, Any]:
-        """Create a Coroot project and return its id.
+        """Create a Coroot project, or rename an existing one.
 
-        Coroot generates a default API key and the built-in alerting rules for the
-        new project.
+        A new project gets a default ingestion key and the built-in alerting
+        rules.
         """
         state = context(ctx)
-        project_id = await state.coroot.projects.create(
+        if project_id:
+            await state.coroot.projects.update(
+                project_id, name=name, member_projects=member_projects
+            )
+            await state.project_choices(refresh=True)
+            return ok(f"Renamed project to {name!r}", project_id=project_id, name=name)
+        new_id = await state.coroot.projects.create(
             name, member_projects=member_projects
         )
         await state.project_choices(refresh=True)
-        return ok(f"Created project {name!r}", project_id=project_id, name=name)
-
-    @mcp.tool(title="Rename a project", annotations=WRITE)
-    @guard
-    async def update_project(
-        ctx: ToolContext,
-        name: Annotated[str, Field(description="New project name (slug format).")],
-        project_id: ProjectIdParam = None,
-        member_projects: Annotated[
-            list[str] | None,
-            Field(description="Replacement list of member projects, if multicluster."),
-        ] = None,
-    ) -> dict[str, Any]:
-        """Rename a project or change its member projects."""
-        state, pid = await target(ctx, project_id)
-        await state.coroot.projects.update(
-            pid, name=name, member_projects=member_projects
-        )
-        await state.project_choices(refresh=True)
-        return ok(f"Updated project {pid}", project_id=pid, name=name)
+        return ok(f"Created project {name!r}", project_id=new_id, name=name)
 
     @mcp.tool(title="Delete a project", annotations=DESTRUCTIVE)
     @guard
@@ -195,41 +166,54 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
     ) -> dict[str, Any]:
         """Delete a project and everything in it.
 
-        Irreversible: incidents, alerts, dashboards, alerting rules and settings go
-        with it. The project id must be passed explicitly.
+        Irreversible: incidents, alerts, dashboards, alerting rules and settings
+        go with it. The project id must be passed explicitly.
         """
         state = context(ctx)
         await state.coroot.projects.delete(project_id)
         await state.project_choices(refresh=True)
         return ok(f"Deleted project {project_id}", project_id=project_id)
 
-    @mcp.tool(title="Create an API key", annotations=CREATE)
+    @mcp.tool(title="Create or delete an ingestion key", annotations=WRITE)
     @guard
-    async def create_api_key(
+    async def manage_api_key(
         ctx: ToolContext,
-        description: Annotated[
-            str, Field(description="What the key is for, e.g. 'staging node agents'.")
+        action: Annotated[
+            Literal["create", "delete"],
+            Field(description="Whether to generate a key or revoke one."),
         ],
+        description: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "What a new key is for, e.g. 'staging node agents'. Required "
+                    "when creating."
+                )
+            ),
+        ] = None,
+        key: Annotated[
+            str | None,
+            Field(description="The key value to revoke. Required when deleting."),
+        ] = None,
         project_id: ProjectIdParam = None,
     ) -> dict[str, Any]:
-        """Generate a telemetry ingestion API key for a project."""
-        state, pid = await target(ctx, project_id)
-        created = await state.coroot.projects.generate_api_key(pid, description)
-        return ok(
-            "Created API key",
-            project_id=pid,
-            key=(created or {}).get("key"),
-            description=description,
-        )
+        """Generate or revoke a telemetry ingestion key.
 
-    @mcp.tool(title="Delete an API key", annotations=DESTRUCTIVE)
-    @guard
-    async def delete_api_key(
-        ctx: ToolContext,
-        key: Annotated[str, Field(description="The API key value from list_api_keys.")],
-        project_id: ProjectIdParam = None,
-    ) -> dict[str, Any]:
-        """Revoke an API key. Agents using it stop being able to send telemetry."""
+        Agents send telemetry with these. Revoking one stops whatever is using
+        it from reporting; read the current keys with get_projects.
+        """
         state, pid = await target(ctx, project_id)
+        if action == "create":
+            if not description:
+                raise ToolError("description is required when creating a key")
+            created = await state.coroot.projects.generate_api_key(pid, description)
+            return ok(
+                "Created ingestion key",
+                project_id=pid,
+                key=(created or {}).get("key"),
+                description=description,
+            )
+        if not key:
+            raise ToolError("key is required when deleting")
         await state.coroot.projects.delete_api_key(pid, key)
-        return ok("Deleted API key", project_id=pid)
+        return ok("Revoked ingestion key", project_id=pid)
