@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from mcp.server.mcpserver import MCPServer
 from pydantic import Field
@@ -12,7 +12,7 @@ from ...client.timerange import ms_to_iso
 from ...config import Settings
 from ..app import CREATE, DESTRUCTIVE, READ_ONLY, WRITE
 from ..compact import compact, limit_items, status_counts
-from ..errors import guard, one_of
+from ..errors import guard
 from ..state import AppState, ToolContext
 from ._common import FromParam, ProjectIdParam, ToParam, ok, respond, target
 
@@ -76,10 +76,8 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
         ctx: ToolContext,
         project_id: ProjectIdParam = None,
         state_filter: Annotated[
-            str,
-            Field(
-                description="Which incidents to return: 'open', 'resolved' or 'any'."
-            ),
+            Literal["open", "resolved", "any"],
+            Field(description="Which incidents to return."),
         ] = "any",
         app_id: Annotated[
             str | None, Field(description="Only incidents for this application id.")
@@ -96,7 +94,7 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
         get_incident for the full analysis of one.
         """
         state, pid = await target(ctx, project_id)
-        wanted = one_of(state_filter, ("open", "resolved", "any"), name="state_filter")
+        wanted = state_filter
         # Coroot filters neither by state nor by application, so a filtered
         # request has to scan more rows than it returns.
         filtering = wanted != "any" or app_id is not None
@@ -184,8 +182,8 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
         ctx: ToolContext,
         project_id: ProjectIdParam = None,
         state_filter: Annotated[
-            str,
-            Field(description="Which alerts to return: 'firing', 'resolved' or 'any'."),
+            Literal["firing", "resolved", "any"],
+            Field(description="Which alerts to return."),
         ] = "firing",
         search: Annotated[
             str | None,
@@ -197,6 +195,16 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
         limit: Annotated[
             int, Field(description="Maximum alerts to return.", ge=1, le=1000)
         ] = 50,
+        offset: Annotated[
+            int,
+            Field(
+                description=(
+                    "Skip this many alerts before returning any, to reach past "
+                    "what an earlier call scanned."
+                ),
+                ge=0,
+            ),
+        ] = 0,
     ) -> dict[str, Any]:
         """List alerts raised by Coroot's alerting rules.
 
@@ -204,9 +212,7 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
         that produced it and the application it concerns.
         """
         state, pid = await target(ctx, project_id)
-        wanted = one_of(
-            state_filter, ("firing", "resolved", "any"), name="state_filter"
-        )
+        wanted = state_filter
         # Coroot matches `search` against the application id server-side, which
         # is the only way to filter by application without scanning every page.
         # It cannot return resolved alerts alone, so that state is filtered here
@@ -219,6 +225,7 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
             include_resolved=wanted != "firing",
             search=server_search,
             limit=scan,
+            offset=offset,
         )
         data = result.data if isinstance(result.data, dict) else {}
         alerts = [a for a in (data.get("alerts") or []) if isinstance(a, dict)]
