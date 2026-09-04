@@ -9,13 +9,19 @@ from pydantic import Field
 
 from ...client.applications import LOG_SEVERITIES, build_trace_param
 from ...client.ids import normalize_app_id
-from ...client.timerange import ms_to_iso
+from ...client.timerange import ms_to_iso, parse_duration_ms
 from ...config import Settings
 from ..app import READ_ONLY
 from ..compact import compact, compact_dict, flamegraph_summary, limit_items
 from ..errors import guard
 from ..state import AppState, ToolContext
 from ._common import AppIdParam, FromParam, ProjectIdParam, ToParam, respond, target
+
+
+def _seconds(value: float) -> str:
+    """Render a duration the way Coroot's heatmap parser expects: float seconds."""
+    return f"{value:g}"
+
 
 ServiceParam = Annotated[
     str | None,
@@ -266,30 +272,50 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
             str,
             Field(
                 description=(
-                    "Lower bound of the slow band, e.g. '1s' or '500ms'. Traces at "
-                    "or above it are compared against the rest."
+                    "Lower bound of the slow band, e.g. '1s', '500ms' or '2.5s'. "
+                    "Traces at or above it are compared against the rest. Must be "
+                    "greater than zero."
                 )
             ),
         ] = "1s",
         faster_than: Annotated[
-            str,
-            Field(description="Upper bound of the slow band; 'inf' for no bound."),
-        ] = "inf",
+            str | None,
+            Field(
+                description=(
+                    "Optional upper bound of the slow band, e.g. '5s'. Omit for no "
+                    "upper bound."
+                )
+            ),
+        ] = None,
         from_time: FromParam = None,
         to_time: ToParam = None,
     ) -> dict[str, Any]:
         """Explain a high p99 by comparing slow traces against normal ones.
 
         Returns where the extra time is spent, as the heaviest frames of a
-        differential flame graph.
+        differential flame graph. Start with the p99 that get_traces reported as
+        slower_than.
         """
         state, pid = await target(ctx, project_id)
+        # Coroot parses these bounds as float seconds, not as durations, and a
+        # band it cannot parse selects nothing at all.
+        dur_from = parse_duration_ms(slower_than) / 1000
+        if dur_from <= 0:
+            raise ValueError(
+                f"slower_than must be greater than zero, got {slower_than!r}"
+            )
+        dur_to = parse_duration_ms(faster_than) / 1000 if faster_than else None
+        if dur_to is not None and dur_to <= dur_from:
+            raise ValueError(
+                f"faster_than ({faster_than}) must be greater than slower_than "
+                f"({slower_than})"
+            )
         result = await state.coroot.overview.traces(
             pid,
             view="latency",
             filters=_trace_filters(service, span),
-            dur_from=slower_than,
-            dur_to=faster_than,
+            dur_from=_seconds(dur_from),
+            dur_to=_seconds(dur_to) if dur_to is not None else None,
             diff=True,
             from_=from_time,
             to=to_time,
@@ -302,8 +328,17 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
             {
                 "project_id": pid,
                 "message": data.get("message") or None,
-                "band": {"slower_than": slower_than, "faster_than": faster_than},
+                "band": {
+                    "slower_than_seconds": dur_from,
+                    "faster_than_seconds": dur_to,
+                },
                 "hotspots": flamegraph_summary(graph, top=25) if graph else None,
+                "note": None
+                if graph
+                else (
+                    "No traces fell in this band. Lower slower_than or widen "
+                    "the time window."
+                ),
             },
         )
 
