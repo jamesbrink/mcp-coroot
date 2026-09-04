@@ -42,11 +42,15 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
         dashboard_id: DashboardIdParam,
         project_id: ProjectIdParam = None,
     ) -> dict[str, Any]:
-        """Get a dashboard with its panel groups and PromQL queries."""
+        """Get a dashboard with its panel groups and PromQL queries.
+
+        Returned verbatim, so it can be edited and sent straight back to
+        update_dashboard_panels.
+        """
         state, pid = await target(ctx, project_id)
         result = await state.coroot.dashboards.get(pid, dashboard_id)
         data = result.data if isinstance(result.data, dict) else {}
-        return respond(state, {"project_id": pid, **data})
+        return respond(state, {"project_id": pid, **data}, summarise=False)
 
     @mcp.tool(title="Query a dashboard panel", annotations=READ_ONLY)
     @guard
