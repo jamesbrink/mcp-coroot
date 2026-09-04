@@ -115,7 +115,20 @@ These come from reading `coroot/coroot` at v1.25 and are easy to get wrong:
   `application_id`, which is the only server-side way to filter by application.
 - `ApiKeys` has no `omitempty`, so a project without keys serialises
   `"keys": null`.
-- A `ChartGroup` is `{"title", "charts": [Chart]}`, not a chart.
+- A `ChartGroup` is `{"title", "charts": [Chart]}`, not a chart. A
+  `timeseries.TimeSeries` is a bare array of floats and also appears under a
+  `chart` key; a dashboard panel's `widget.chart` is `{"display", "stacked"}`
+  and is not a chart at all.
+- Integration and instrumentation secrets are masked **only** when the caller
+  may not edit them (`form.Get(project, !isAllowed)`). An Admin or Editor reads
+  them in clear, so `server/secrets.py` redacts them here.
+- `FlameGraphNode.Diff` dereferences its argument without a nil check, and
+  `getTraceLatencyFlamegraph` returns nil for an empty trace list, so asking
+  the traces view for `diff` can crash the handler. Never request it.
+- An alert is resolved if `resolved_at`, `manually_resolved_at` **or**
+  `suppressed` is set; checking only the first misses alerts a person closed.
+- Coroot ignores `from`/`to` when listing incidents, so a narrower window
+  cannot surface older ones; only a larger `limit` can.
 
 ## Verification
 
