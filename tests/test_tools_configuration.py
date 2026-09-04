@@ -107,10 +107,32 @@ async def test_update_inspection_config_scopes(
 
 
 async def test_application_category_crud(fake: FakeCoroot, settings: Settings) -> None:
-    project(fake).on(
-        "GET",
-        "/api/project/p1/application_categories",
-        [{"name": "application", "builtin": True, "custom_patterns": ""}],
+    routing = {
+        "incidents": {"enabled": True, "slack": {"enabled": True, "channel": "ops"}}
+    }
+
+    def get_categories(request: httpx.Request) -> httpx.Response:
+        name = request.url.params.get("name")
+        if name is None:
+            return httpx.Response(
+                200,
+                json=[{"name": "application", "builtin": True, "custom_patterns": ""}],
+            )
+        if name == "":
+            return httpx.Response(200, json={"action": "", "id": "", "name": ""})
+        return httpx.Response(
+            200,
+            json={
+                "action": "",
+                "id": name,
+                "name": name,
+                "custom_patterns": "default/pay-*",
+                "notification_settings": routing,
+            },
+        )
+
+    project(fake).handle(
+        "GET", "/api/project/p1/application_categories", get_categories
     )
     fake.on("POST", "/api/project/p1/application_categories")
     async with make_client(fake, settings) as client:
@@ -127,14 +149,30 @@ async def test_application_category_crud(fake: FakeCoroot, settings: Settings) -
         assert body["custom_patterns"] == "default/postgres-* default/redis-*"
         assert body["id"] == ""
 
+        # Updating only the patterns must not erase the category's notification
+        # routing: Coroot replaces the whole category on save.
         await call(
             client,
             "save_application_category",
-            name="datastores",
-            current_name="databases",
-            custom_patterns=["default/*"],
+            name="payments",
+            current_name="payments",
+            custom_patterns=["prod/pay-*"],
         )
-        assert fake.body(fake.last)["id"] == "databases"
+        body = fake.body(fake.last)
+        assert body["custom_patterns"] == "prod/pay-*"
+        assert body["notification_settings"] == routing
+
+        # ...and updating only the routing must not erase the patterns.
+        await call(
+            client,
+            "save_application_category",
+            name="payments",
+            current_name="payments",
+            notification_settings={"incidents": {"enabled": False}},
+        )
+        body = fake.body(fake.last)
+        assert body["custom_patterns"] == "default/pay-*"
+        assert body["notification_settings"] == {"incidents": {"enabled": False}}
 
         await call(client, "delete_application_category", name="datastores")
     assert fake.body(fake.last)["action"] == "delete"
