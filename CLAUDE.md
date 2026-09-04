@@ -100,6 +100,22 @@ These come from reading `coroot/coroot` at v1.25 and are easy to get wrong:
 - `POST /api/roles` always returns 405, and `/api/sso` and `/api/ai` are stubs
   in Community Edition.
 - The project-wide scope for inspection config is the application id `::`.
+- `dur_from`/`dur_to` on the traces view are parsed by `ParseHeatmapDuration`,
+  which accepts **float seconds only**. A Go-style duration yields zero, no
+  selection is defined, and the latency view then calls `FlameGraphNode.Diff`
+  on a nil comparison, which dereferences it.
+- Saving an application category replaces it: `CustomPatterns` and
+  `NotificationSettings` are both assigned from the body, so a partial update
+  must read the current form first.
+- The profiling `query` parameter is a category (`cpu`/`memory`/`lock`) only
+  when it is not JSON. Inside JSON the field is a concrete `ProfileType`, and
+  the category is resolved only when that type is empty.
+- `QueryAlerts` pages in SQL while its firing/resolved counts are unlimited,
+  and it cannot return resolved alerts alone. Its `search` does match
+  `application_id`, which is the only server-side way to filter by application.
+- `ApiKeys` has no `omitempty`, so a project without keys serialises
+  `"keys": null`.
+- A `ChartGroup` is `{"title", "charts": [Chart]}`, not a chart.
 
 ## Verification
 
