@@ -12,7 +12,7 @@ from ...client.ids import normalize_app_id
 from ...client.timerange import ms_to_iso
 from ...config import Settings
 from ..app import READ_ONLY
-from ..compact import compact, flamegraph_summary, limit_items
+from ..compact import compact, compact_dict, flamegraph_summary, limit_items
 from ..errors import guard
 from ..state import AppState, ToolContext
 from ._common import AppIdParam, FromParam, ProjectIdParam, ToParam, respond, target
@@ -462,7 +462,7 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
         """
         state, pid = await target(ctx, project_id)
         data = await state.coroot.metrics.query(pid, query, from_=from_time, to=to_time)
-        chart = compact({"chart": data.get("chart")}).get("chart") or {}
+        chart = compact_dict({"chart": data.get("chart")}).get("chart") or {}
         series = chart.get("series") or []
         kept, omitted = limit_items(series, limit)
         return respond(
@@ -474,6 +474,12 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
                 "series_count": len(series),
                 "omitted": omitted or None,
                 "series": kept,
+                "message": None
+                if series
+                else (
+                    "The query matched no series in this window. Check the metric "
+                    "name with list_metrics, or widen from_time."
+                ),
             },
         )
 

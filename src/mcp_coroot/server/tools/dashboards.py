@@ -10,7 +10,7 @@ from pydantic import Field
 from ...client.dashboards import build_panel, metrics_query
 from ...config import Settings
 from ..app import DESTRUCTIVE, READ_ONLY, WRITE
-from ..compact import compact
+from ..compact import compact_dict
 from ..errors import guard
 from ..state import AppState, ToolContext
 from ._common import FromParam, ProjectIdParam, ToParam, ok, respond, target
@@ -96,12 +96,16 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
         data = await state.coroot.dashboards.panel_data(
             pid, panel, from_=from_time, to=to_time
         )
+        chart = compact_dict({"chart": data.get("chart")}).get("chart")
         return respond(
             state,
             {
                 "project_id": pid,
                 "queries": queries,
-                **compact({"chart": data.get("chart")}),
+                "chart": chart,
+                "message": None
+                if chart
+                else "The queries matched no series in this window.",
             },
         )
 
