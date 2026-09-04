@@ -262,8 +262,16 @@ async def test_get_application_extracts_failing_checks(
             }
         ]
         assert result["report_names"] == ["SLO", "CPU"]
+        # Without a report argument the full reports are left out; the note says
+        # how to ask for one.
+        assert "reports" not in result
+        assert "report=" in result["note"]
+
+        detail = await call(
+            client, "get_application", app_id="default:Deployment:api", report="SLO"
+        )
         # Chart data must be summarised, never returned raw.
-        chart = result["reports"][0]["widgets"][0]["chart"]
+        chart = detail["reports"][0]["widgets"][0]["chart"]
         assert chart["series"][0]["max"] == 5.0
 
         single = await call(
@@ -454,7 +462,10 @@ async def test_traces_and_errors(one_project: FakeCoroot, settings: Settings) ->
             ),
         )
         result = await call(client, "get_traces", service="checkout")
-        assert result["endpoints"][0]["span_name"] == "GET /cart"
+        endpoint = result["endpoints"][0]
+        assert endpoint["span"] == "GET /cart"
+        assert endpoint["requests"] == 100
+        assert endpoint["error_rate"] == 0.05
         query = json.loads(dict(one_project.last.url.params)["query"])
         assert query["view"] == "summary"
         assert query["filters"][0]["value"] == "checkout"
