@@ -129,12 +129,18 @@ def fake() -> FakeCoroot:
     return FakeCoroot()
 
 
+#: Every group, so a test can reach any tool. Production defaults to
+#: `diagnose` alone; test_toolsets_select_what_is_registered covers that.
+ALL_TOOLSETS = frozenset({"diagnose", "alerts", "dashboards", "config", "admin"})
+
+
 @pytest.fixture
 def settings() -> Settings:
     return Settings(
         base_url="http://coroot.test",
         username="admin",
         password="secret",
+        toolsets=ALL_TOOLSETS,
     )
 
 

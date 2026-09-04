@@ -11,6 +11,11 @@ specification. Configuration is unchanged; tool names are not.
 
 ### Added
 
+- `COROOT_TOOLSETS`, which selects the groups of tools to expose. The default,
+  `diagnose`, carries the 42 tools needed to investigate a running system, and
+  costs about 14,000 tokens of context rather than 23,000. Set it to `all` for
+  the previous behaviour.
+
 - Incidents and alerts: `list_incidents`, `get_incident`, `list_alerts`,
   `get_alert`, `resolve_alerts`, `suppress_alerts`, `reopen_alerts`.
 - Alerting rules: list, get, create, update, delete and YAML export.
@@ -68,6 +73,10 @@ specification. Configuration is unchanged; tool names are not.
 
 ### Removed
 
+- `change_password`, whose success invalidates the credential this server
+  authenticates with, and `set_notification_base_url`, an install-day setting.
+  `delete_custom_cloud_pricing` folded into `set_cloud_pricing`, which resets
+  when called with no prices.
 - Automatic loading of a `.env` file. Settings come from the process
   environment only, so export them or pass them in your client's `env` block.
 - `update_sso_config` and `update_ai_config`. Those settings are readable
@@ -86,6 +95,9 @@ specification. Configuration is unchanged; tool names are not.
   error.
 - Wrong credentials return 404 from Coroot, which is now reported as an
   authentication failure rather than a missing resource.
+- The trace tools are named so no two differ by one character:
+  `summarize_trace_endpoints`, `list_traces`, `get_trace_by_id`,
+  `list_trace_error_reasons` and `explain_trace_latency`.
 - Trace latency bounds are sent as the float seconds Coroot parses. Go-style
   durations resolved to zero, which selected no traces and left the server
   diffing against a nil flame graph.

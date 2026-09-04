@@ -359,7 +359,8 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
         yaml = await state.coroot.alerting_rules.export(pid)
         return respond(state, {"project_id": pid, "yaml": yaml})
 
-    if settings.read_only:
+    # Acting on alerts and editing rules belong to the alerts group.
+    if settings.read_only or not settings.enabled("alerts"):
         return
 
     @mcp.tool(title="Resolve alerts", annotations=DESTRUCTIVE)

@@ -243,9 +243,9 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
             },
         )
 
-    @mcp.tool(title="Summarise traces", annotations=READ_ONLY)
+    @mcp.tool(title="Summarise trace endpoints", annotations=READ_ONLY)
     @guard
-    async def get_traces(
+    async def summarize_trace_endpoints(
         ctx: ToolContext,
         project_id: ProjectIdParam = None,
         service: ServiceParam = None,
@@ -299,9 +299,9 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
             },
         )
 
-    @mcp.tool(title="Get trace errors", annotations=READ_ONLY)
+    @mcp.tool(title="List trace error reasons", annotations=READ_ONLY)
     @guard
-    async def get_trace_errors(
+    async def list_trace_error_reasons(
         ctx: ToolContext,
         project_id: ProjectIdParam = None,
         service: ServiceParam = None,
@@ -311,8 +311,8 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
     ) -> dict[str, Any]:
         """List the top error reasons in traces, with a sample trace id for each.
 
-        Feed a sample trace id to get_trace to see the whole failing request,
-        or use list_traces to pick one yourself.
+        Feed a sample trace id to get_trace_by_id to see the whole failing
+        request, or use list_traces to pick one yourself.
         """
         state, pid = await target(ctx, project_id)
         result = await state.coroot.overview.traces(
@@ -334,7 +334,7 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
 
     @mcp.tool(title="Explain slow traces", annotations=READ_ONLY)
     @guard
-    async def get_trace_latency(
+    async def explain_trace_latency(
         ctx: ToolContext,
         project_id: ProjectIdParam = None,
         service: ServiceParam = None,
@@ -364,8 +364,8 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
         """Explain a high p99 by showing where slow requests spend their time.
 
         Returns the heaviest frames of a flame graph built from traces inside
-        the band. Sizes from get_traces are in SECONDS, so pass them with a unit
-        ('1.85s'), not as a bare number: a bare number is read as milliseconds.
+        the band. Sizes from summarize_trace_endpoints are in SECONDS, so pass
+        them with a unit ('1.85s'): a bare number is read as milliseconds.
         """
         state, pid = await target(ctx, project_id)
         # Coroot parses these bounds as float seconds, not as durations, and a
@@ -444,9 +444,9 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
     ) -> dict[str, Any]:
         """List individual traces, with the ids needed to open one.
 
-        The step between get_traces, which says an endpoint's p99 is bad, and
-        get_trace, which shows one request in full: this finds actual slow or
-        failed requests to look at. Requires ClickHouse in Coroot.
+        The step between summarize_trace_endpoints, which says an endpoint's
+        p99 is bad, and get_trace_by_id, which shows one request in full: this
+        finds the actual slow or failed requests. Requires ClickHouse in Coroot.
         """
         state, pid = await target(ctx, project_id)
         dur_from = (
@@ -491,13 +491,17 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
             },
         )
 
-    @mcp.tool(title="Get one trace", annotations=READ_ONLY)
+    @mcp.tool(title="Get one trace by id", annotations=READ_ONLY)
     @guard
-    async def get_trace(
+    async def get_trace_by_id(
         ctx: ToolContext,
         trace_id: Annotated[
             str,
-            Field(description="Trace id, e.g. from get_trace_errors or get_logs."),
+            Field(
+                description=(
+                    "Trace id, from list_traces, list_trace_error_reasons or get_logs."
+                )
+            ),
         ],
         project_id: ProjectIdParam = None,
         app_id: Annotated[

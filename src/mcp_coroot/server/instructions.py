@@ -21,11 +21,12 @@ Pick the cheapest tool that answers the question:
 - Why is one application unhealthy? get_application returns its audit reports,
   failing checks and dependencies. get_application_rca asks Coroot for an AI root
   cause analysis when Coroot Cloud is configured.
-- Where is time going? get_traces for per-endpoint rates, error rates and latency
-  quantiles (in seconds, worst first); list_traces to find individual slow or
-  failed requests; get_trace for one full span tree; get_trace_errors for failure
-  reasons; get_trace_latency for where the slow tail spends its time; get_profile
-  for CPU, memory or lock flame graphs.
+- Where is time going? summarize_trace_endpoints for per-endpoint rates, error
+  rates and latency quantiles (in seconds, worst first); list_traces to find
+  individual slow or failed requests; get_trace_by_id for one full span tree;
+  list_trace_error_reasons for failure reasons; explain_trace_latency for where
+  the slow tail spends its time; get_profile for CPU, memory or lock flame
+  graphs.
 - What do the logs say? get_logs (one application or the whole project) with
   severity filters and full-text search; get_log_patterns groups repeated messages.
 - How are the hosts? list_nodes, then get_node for one host's audit report.
