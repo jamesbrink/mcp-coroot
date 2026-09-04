@@ -52,6 +52,27 @@ class AppState:
         )
 
 
+class StateHolder:
+    """Holds the live :class:`AppState` for code that cannot receive a Context.
+
+    The MCP SDK does not inject a context into static (non-templated) resources,
+    so the lifespan publishes the state here instead.
+    """
+
+    __slots__ = ("_state",)
+
+    def __init__(self) -> None:
+        self._state: AppState | None = None
+
+    def set(self, state: AppState | None) -> None:
+        self._state = state
+
+    def get(self) -> AppState:
+        if self._state is None:
+            raise ToolError("The Coroot server is not connected yet")
+        return self._state
+
+
 #: The context type injected into tools.
 ToolContext = Context[AppState, None]
 
