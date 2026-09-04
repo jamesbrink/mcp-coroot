@@ -114,6 +114,17 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
                 )
             ),
         ] = None,
+        view: Annotated[
+            Literal["messages", "patterns"],
+            Field(
+                description=(
+                    "messages: individual entries, newest first. patterns: "
+                    "repeated messages grouped by shape with their volumes, "
+                    "which is faster for 'what is this application complaining "
+                    "about' and needs no ClickHouse."
+                )
+            ),
+        ] = "messages",
         severity: Annotated[
             list[str] | None,
             Field(
@@ -150,13 +161,42 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
         from_time: FromParam = None,
         to_time: ToParam = None,
     ) -> dict[str, Any]:
-        """Search log entries, newest first, for one application or a whole project.
+        """Search log entries, or group them into repeated patterns.
 
-        Requires ClickHouse in Coroot. Start narrow: a one-hour window with a
-        severity filter. To continue past the entries returned, pass the
-        response's next_since value back as `since`.
+        Messages need ClickHouse in Coroot; patterns are derived from metrics
+        and work without it, but need an application. Start narrow: a one-hour
+        window with a severity filter. To continue past the entries returned,
+        pass the response's next_since value back as `since`.
         """
         state, pid = await target(ctx, project_id)
+        if view == "patterns":
+            if not app_id:
+                raise ValueError("app_id is required for the patterns view")
+            grouped = await state.coroot.applications.logs(
+                pid, app_id, view="patterns", from_=from_time, to=to_time
+            )
+            pattern_data = grouped.data if isinstance(grouped.data, dict) else {}
+            patterns = [
+                {
+                    "severity": p.get("severity"),
+                    "count": p.get("sum"),
+                    "sample": p.get("sample"),
+                    "hash": p.get("hash"),
+                }
+                for p in (pattern_data.get("patterns") or [])
+                if isinstance(p, dict)
+            ]
+            patterns.sort(key=lambda p: p.get("count") or 0, reverse=True)
+            return respond(
+                state,
+                {
+                    "project_id": pid,
+                    "application_id": normalize_app_id(app_id, project_id=pid),
+                    "message": pattern_data.get("message") or None,
+                    "count": len(patterns),
+                    "patterns": patterns,
+                },
+            )
         for level in severity or []:
             if level.strip().lower() not in LOG_SEVERITIES:
                 raise ValueError(
@@ -199,47 +239,6 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
                 "omitted": omitted or None,
                 "next_since": data.get("max_ts") or None,
                 "entries": [_entry_digest(e) for e in kept],
-            },
-        )
-
-    @mcp.tool(title="Get log patterns", annotations=READ_ONLY)
-    @guard
-    async def get_log_patterns(
-        ctx: ToolContext,
-        app_id: AppIdParam,
-        project_id: ProjectIdParam = None,
-        from_time: FromParam = None,
-        to_time: ToParam = None,
-    ) -> dict[str, Any]:
-        """Group an application's logs into repeated patterns with their volumes.
-
-        Faster than reading raw logs when you want to know what an application is
-        complaining about most. Works from metrics, so it does not need ClickHouse.
-        """
-        state, pid = await target(ctx, project_id)
-        result = await state.coroot.applications.logs(
-            pid, app_id, view="patterns", from_=from_time, to=to_time
-        )
-        data = result.data if isinstance(result.data, dict) else {}
-        patterns = [
-            {
-                "severity": p.get("severity"),
-                "count": p.get("sum"),
-                "sample": p.get("sample"),
-                "hash": p.get("hash"),
-            }
-            for p in (data.get("patterns") or [])
-            if isinstance(p, dict)
-        ]
-        patterns.sort(key=lambda p: p.get("count") or 0, reverse=True)
-        return respond(
-            state,
-            {
-                "project_id": pid,
-                "application_id": normalize_app_id(app_id, project_id=pid),
-                "message": data.get("message") or None,
-                "count": len(patterns),
-                "patterns": patterns,
             },
         )
 
@@ -670,6 +669,10 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
                 )
             ),
         ],
+        legend: Annotated[
+            str | None,
+            Field(description="Legend template for the series, e.g. '{{instance}}'."),
+        ] = None,
         project_id: ProjectIdParam = None,
         from_time: FromParam = None,
         to_time: ToParam = None,
@@ -684,7 +687,9 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
         metric no built-in report covers.
         """
         state, pid = await target(ctx, project_id)
-        data = await state.coroot.metrics.query(pid, query, from_=from_time, to=to_time)
+        data = await state.coroot.metrics.query(
+            pid, query, legend=legend or "", from_=from_time, to=to_time
+        )
         chart = compact_dict({"chart": data.get("chart")}).get("chart") or {}
         series = chart.get("series") or []
         kept, omitted = limit_items(series, limit)

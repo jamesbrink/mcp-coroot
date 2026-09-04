@@ -12,22 +12,23 @@ specification. Configuration is unchanged; tool names are not.
 ### Added
 
 - `COROOT_TOOLSETS`, which selects the groups of tools to expose. The default,
-  `diagnose`, carries the 42 tools needed to investigate a running system, and
-  costs about 14,000 tokens of context rather than 23,000. Set it to `all` for
-  the previous behaviour.
-
-- Incidents and alerts: `list_incidents`, `get_incident`, `list_alerts`,
-  `get_alert`, `resolve_alerts`, `suppress_alerts`, `reopen_alerts`.
-- Alerting rules: list, get, create, update, delete and YAML export.
-- `get_service_map` for the dependency graph, `get_costs` for cloud spend and
-  over-provisioning, `list_risks` for availability and security risks.
+  `diagnose`, carries the 20 tools needed to investigate a running system, and
+  costs about 9,000 tokens of context rather than 17,000. Set it to `all` to
+  expose all 44.
+- Incidents and alerts: `get_incidents`, `get_alerts` and `set_alert_state`,
+  which resolves, suppresses or reopens.
+- Alerting rules: `get_alerting_rules` (list, one rule, or the whole set as
+  YAML), `save_alerting_rule` and `delete_alerting_rule`.
+- `get_overview`, which serves the project-wide views: the dependency map,
+  deployments, availability and security risks, and cloud spend.
 - `get_metrics` and `list_metrics` for PromQL queries and metric discovery.
-- Trace tools split by intent: `get_traces`, `get_trace_errors`,
-  `get_trace_latency` and `get_trace`.
-- `get_log_patterns`, which groups repeated messages without needing ClickHouse.
-- `list_traces`, which finds individual slow or failed traces. Without it the
-  path from "this endpoint's p99 is bad" to "show me one of those requests"
-  had no first step.
+- Trace tools split by intent: `summarize_trace_endpoints`, `list_traces`,
+  `list_trace_error_reasons`, `explain_trace_latency` and `get_trace_by_id`.
+  `list_traces` in particular finds individual slow or failed traces; without
+  it the path from "this endpoint's p99 is bad" to "show me one of those
+  requests" had no first step.
+- `get_logs(view="patterns")`, which groups repeated messages without needing
+  ClickHouse.
 - Four prompts (`investigate_application`, `triage_project`, `review_incident`,
   `review_costs`) and resources for projects, per-project applications and a
   reference of id formats and check ids.
@@ -50,8 +51,12 @@ specification. Configuration is unchanged; tool names are not.
   six-figure token counts.
 - One pooled HTTP client for the process, rather than a new one per request,
   with automatic re-login when a session expires.
-- Overview tools renamed to verbs: `list_applications`, `list_nodes`,
-  `list_deployments`, `list_risks`.
+- 44 tools instead of 0.1.x's 61, with more of Coroot's API covered. Reads fold into
+  the list tool for their domain (`get_projects`, `get_incidents`,
+  `get_alerts`, `get_inspections`, `get_project_config`, `get_dashboards`,
+  `get_users`), create and update become one `save_` tool each, and the three
+  alert actions become `set_alert_state`. The full surface is the README's
+  inventory; see "Upgrading from 0.1.x" there for the old-to-new mapping.
 - Three-part application ids are completed with the project's cluster id, and
   path segments are encoded the way Coroot's router expects.
 - Docker image rebuilt as a multi-stage `uv` build running as a non-root user.
@@ -60,7 +65,7 @@ specification. Configuration is unchanged; tool names are not.
 
 - Integration and database credentials are redacted before they reach the
   model. Coroot returns them in clear to any account allowed to edit them,
-  which is the account this server normally runs as, so `get_integration` was
+  which is the account this server normally runs as, so `get_integrations` was
   exposing Slack tokens, PagerDuty and Opsgenie keys, Teams webhook URLs and
   AWS access keys, and `get_db_instrumentation` was exposing database
   passwords. Set `COROOT_REVEAL_SECRETS` to opt out of the redaction.

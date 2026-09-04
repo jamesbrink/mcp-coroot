@@ -34,7 +34,7 @@ def register_all(mcp: MCPServer[AppState], settings: Settings) -> None:
         telemetry.register(mcp, settings)
     if settings.enabled("diagnose") or settings.enabled("alerts"):
         incidents.register(mcp, settings)
-    if settings.enabled("config") or settings.enabled("diagnose"):
+    if settings.enabled("config"):
         configuration.register(mcp, settings)
     if settings.enabled("dashboards"):
         dashboards.register(mcp, settings)

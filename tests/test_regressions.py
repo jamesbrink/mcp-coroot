@@ -522,7 +522,7 @@ async def test_incident_app_filter_normalises_the_id(
     async with Client(server) as client:
         # A three-part id must still match the four-part id Coroot returns.
         result = await client.call_tool(
-            "list_incidents", {"app_id": "ns:Deployment:api"}
+            "get_incidents", {"app_id": "ns:Deployment:api"}
         )
     assert result.is_error is False
     assert isinstance(result.structured_content, dict)

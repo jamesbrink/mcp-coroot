@@ -188,53 +188,47 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
             )
         return respond(state, payload)
 
-    @mcp.tool(title="Get the service map", annotations=READ_ONLY)
+    @mcp.tool(title="Get nodes", annotations=READ_ONLY)
     @guard
-    async def get_service_map(
+    async def get_nodes(
         ctx: ToolContext,
         project_id: ProjectIdParam = None,
+        node: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Report one host in full: its CPU, memory, disk and network "
+                    "checks. Omit to list every host."
+                )
+            ),
+        ] = None,
         from_time: FromParam = None,
         to_time: ToParam = None,
     ) -> dict[str, Any]:
-        """Get the dependency graph: which applications call which, and their health.
+        """List hosts with their utilisation, or open one's audit report.
 
-        Use it to trace a failure from a symptom to its upstream cause.
+        Use the listing to spot a host that is down or saturated, then name it
+        to see which of its checks are failing.
         """
         state, pid = await target(ctx, project_id)
-        result = await state.coroot.overview.service_map(
-            pid, from_=from_time, to=to_time
-        )
-        apps = [a for a in (result.data or []) if isinstance(a, dict)]
-        edges = [
-            {
-                "id": app.get("id"),
-                "status": app.get("status"),
-                "category": app.get("category"),
-                "upstreams": [
-                    {"id": u.get("id"), "status": u.get("status")}
-                    for u in (app.get("upstreams") or [])
-                    if isinstance(u, dict)
-                ],
-            }
-            for app in apps
-        ]
-        return respond(
-            state,
-            {"project_id": pid, "count": len(edges), "applications": edges},
-        )
+        if node:
+            result = await state.coroot.nodes.get(
+                pid, node, from_=from_time, to=to_time
+            )
+            data = result.data if isinstance(result.data, dict) else {}
+            return respond(
+                state,
+                {
+                    "project_id": pid,
+                    "node": node,
+                    "status": data.get("status"),
+                    "checks": data.get("checks"),
+                    "report": compact(data),
+                },
+            )
 
-    @mcp.tool(title="List nodes", annotations=READ_ONLY)
-    @guard
-    async def list_nodes(
-        ctx: ToolContext,
-        project_id: ProjectIdParam = None,
-        from_time: FromParam = None,
-        to_time: ToParam = None,
-    ) -> dict[str, Any]:
-        """List hosts with status, CPU and memory utilisation and instance type."""
-        state, pid = await target(ctx, project_id)
-        result = await state.coroot.overview.nodes(pid, from_=from_time, to=to_time)
-        nodes = [n for n in (result.data or []) if isinstance(n, dict)]
+        listed = await state.coroot.overview.nodes(pid, from_=from_time, to=to_time)
+        nodes = [n for n in (listed.data or []) if isinstance(n, dict)]
         digests = [
             {
                 "name": n.get("name"),
@@ -261,147 +255,126 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
             },
         )
 
-    @mcp.tool(title="Get node details", annotations=READ_ONLY)
+    @mcp.tool(title="Get a project overview", annotations=READ_ONLY)
     @guard
-    async def get_node(
+    async def get_overview(
         ctx: ToolContext,
-        node: Annotated[str, Field(description="Node name from list_nodes.")],
-        project_id: ProjectIdParam = None,
-        from_time: FromParam = None,
-        to_time: ToParam = None,
-    ) -> dict[str, Any]:
-        """Get one host's audit report: CPU, memory, disk and network checks."""
-        state, pid = await target(ctx, project_id)
-        result = await state.coroot.nodes.get(pid, node, from_=from_time, to=to_time)
-        data = result.data if isinstance(result.data, dict) else {}
-        return respond(
-            state,
-            {
-                "project_id": pid,
-                "node": node,
-                "status": data.get("status"),
-                "checks": data.get("checks"),
-                "report": compact(data),
-            },
-        )
-
-    @mcp.tool(title="List deployments", annotations=READ_ONLY)
-    @guard
-    async def list_deployments(
-        ctx: ToolContext,
-        project_id: ProjectIdParam = None,
-        from_time: FromParam = None,
-        to_time: ToParam = None,
-        limit: LimitParam = 50,
-    ) -> dict[str, Any]:
-        """List recent deployments and the impact Coroot measured for each.
-
-        Use it to answer "what changed?" when a problem started at a known time;
-        widen from_time to look further back.
-        """
-        state, pid = await target(ctx, project_id)
-        result = await state.coroot.overview.deployments(
-            pid, from_=from_time, to=to_time
-        )
-        deployments = [d for d in (result.data or []) if isinstance(d, dict)]
-        digests = []
-        for dep in deployments:
-            application = dep.get("application") or {}
-            digests.append(
-                {
-                    "application_id": application.get("id")
-                    if isinstance(application, dict)
-                    else None,
-                    "version": dep.get("version"),
-                    "deployed": dep.get("deployed"),
-                    "age": dep.get("age"),
-                    "status": dep.get("status"),
-                    "summary": [
-                        {"status": s.get("status"), "message": s.get("message")}
-                        for s in (dep.get("summary") or [])
-                        if isinstance(s, dict)
-                    ],
-                }
-            )
-        kept, omitted = limit_items(digests, limit)
-        return respond(
-            state,
-            {
-                "project_id": pid,
-                "total": len(digests),
-                "omitted": omitted or None,
-                "deployments": kept,
-            },
-        )
-
-    @mcp.tool(title="List risks", annotations=READ_ONLY)
-    @guard
-    async def list_risks(
-        ctx: ToolContext,
+        view: Annotated[
+            Literal["map", "deployments", "risks", "costs"],
+            Field(
+                description=(
+                    "map: which applications call which, and their health. "
+                    "deployments: recent rollouts and their measured impact. "
+                    "risks: single-instance or unreplicated workloads and "
+                    "exposed databases. costs: per-node and per-application "
+                    "spend, with over-provisioning."
+                )
+            ),
+        ],
         project_id: ProjectIdParam = None,
         include_dismissed: Annotated[
-            bool, Field(description="Include risks somebody has dismissed.")
+            bool,
+            Field(description="For risks: include ones somebody has accepted."),
         ] = False,
+        limit: Annotated[
+            int, Field(description="Maximum entries to return.", ge=1, le=1000)
+        ] = 50,
         from_time: FromParam = None,
         to_time: ToParam = None,
     ) -> dict[str, Any]:
-        """List availability and security risks Coroot detected.
+        """Answer a project-wide question: dependencies, changes, risks or spend.
 
-        Covers single-instance or single-node applications, unreplicated
-        databases, spot-only workloads and databases exposed to the internet.
+        Use `map` to trace a failure to its upstream cause, `deployments` to
+        answer "what changed?" over a window that starts before the problem did,
+        `risks` for availability and security exposure, and `costs` for
+        over-provisioned workloads and idle capacity.
         """
         state, pid = await target(ctx, project_id)
-        result = await state.coroot.overview.risks(pid, from_=from_time, to=to_time)
-        risks = [r for r in (result.data or []) if isinstance(r, dict)]
-        if not include_dismissed:
-            risks = [r for r in risks if not r.get("dismissal")]
-        digests = [
-            {
-                "application_id": r.get("application_id"),
-                "category": (r.get("key") or {}).get("category"),
-                "type": (r.get("key") or {}).get("type"),
-                "severity": r.get("severity"),
-                "dismissed": bool(r.get("dismissal")),
-                "exposure": r.get("exposure"),
-                "availability": r.get("availability"),
+        result = await state.coroot.overview.get(pid, view, from_=from_time, to=to_time)
+        payload: dict[str, Any] = {"project_id": pid, "view": view}
+
+        if view == "map":
+            apps = [a for a in (result.data or []) if isinstance(a, dict)]
+            payload["applications"] = [
+                {
+                    "id": app.get("id"),
+                    "status": app.get("status"),
+                    "category": app.get("category"),
+                    "upstreams": [
+                        {"id": u.get("id"), "status": u.get("status")}
+                        for u in (app.get("upstreams") or [])
+                        if isinstance(u, dict)
+                    ],
+                }
+                for app in apps
+            ]
+            payload["count"] = len(apps)
+            return respond(state, payload)
+
+        if view == "deployments":
+            deployments = [d for d in (result.data or []) if isinstance(d, dict)]
+            digests = []
+            for dep in deployments:
+                application = dep.get("application") or {}
+                digests.append(
+                    {
+                        "application_id": application.get("id")
+                        if isinstance(application, dict)
+                        else None,
+                        "version": dep.get("version"),
+                        "deployed": dep.get("deployed"),
+                        "age": dep.get("age"),
+                        "status": dep.get("status"),
+                        "summary": [
+                            {"status": x.get("status"), "message": x.get("message")}
+                            for x in (dep.get("summary") or [])
+                            if isinstance(x, dict)
+                        ],
+                    }
+                )
+            kept, omitted = limit_items(digests, limit)
+            payload |= {
+                "count": len(digests),
+                "omitted": omitted or None,
+                "deployments": kept,
             }
-            for r in risks
-        ]
-        return respond(
-            state,
-            {"project_id": pid, "count": len(digests), "risks": digests},
-        )
+            return respond(state, payload)
 
-    @mcp.tool(title="Get cloud costs", annotations=READ_ONLY)
-    @guard
-    async def get_costs(
-        ctx: ToolContext,
-        project_id: ProjectIdParam = None,
-        from_time: FromParam = None,
-        to_time: ToParam = None,
-        limit: LimitParam = 50,
-    ) -> dict[str, Any]:
-        """Get per-node and per-application cloud costs, including over-provisioning.
+        if view == "risks":
+            risks = [r for r in (result.data or []) if isinstance(r, dict)]
+            if not include_dismissed:
+                risks = [r for r in risks if not r.get("dismissal")]
+            digests = [
+                {
+                    "application_id": r.get("application_id"),
+                    "category": (r.get("key") or {}).get("category"),
+                    "type": (r.get("key") or {}).get("type"),
+                    "severity": r.get("severity"),
+                    "dismissed": bool(r.get("dismissal")),
+                    "exposure": r.get("exposure"),
+                    "availability": r.get("availability"),
+                }
+                for r in risks
+            ]
+            kept, omitted = limit_items(digests, limit)
+            payload |= {
+                "count": len(digests),
+                "omitted": omitted or None,
+                "risks": kept,
+            }
+            return respond(state, payload)
 
-        Application entries include recommended CPU and memory requests, which is
-        where most of the savings usually are.
-        """
-        state, pid = await target(ctx, project_id)
-        result = await state.coroot.overview.costs(pid, from_=from_time, to=to_time)
         data = result.data if isinstance(result.data, dict) else {}
         nodes, nodes_omitted = limit_items(data.get("nodes") or [], limit)
-        apps, apps_omitted = limit_items(data.get("applications") or [], limit)
-        return respond(
-            state,
-            {
-                "project_id": pid,
-                "custom_pricing": data.get("custom_pricing"),
-                "nodes": nodes,
-                "nodes_omitted": nodes_omitted or None,
-                "applications": apps,
-                "applications_omitted": apps_omitted or None,
-            },
-        )
+        apps_kept, apps_omitted = limit_items(data.get("applications") or [], limit)
+        payload |= {
+            "custom_pricing": data.get("custom_pricing"),
+            "nodes": nodes,
+            "nodes_omitted": nodes_omitted or None,
+            "applications": apps_kept,
+            "applications_omitted": apps_omitted or None,
+        }
+        return respond(state, payload)
 
     @mcp.tool(title="Get AI root cause analysis", annotations=READ_ONLY)
     @guard

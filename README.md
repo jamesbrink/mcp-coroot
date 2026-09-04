@@ -94,11 +94,10 @@ expires, which Coroot does after seven days.
 
 ### Toolsets
 
-The whole surface is 75 tools, and carrying it costs roughly 23,000 tokens of
-context in every conversation before a single call. Most of it configures
-Coroot rather than investigating a running system, so the default exposes the
-`diagnose` group only: 42 tools, about 14,000 tokens, covering applications,
-nodes, logs, traces, profiles, metrics, incidents and alerts.
+Carrying every tool costs context in every conversation before a single call,
+and most of the surface configures Coroot rather than investigating a running
+system. The default exposes the `diagnose` group only: 20 tools covering
+applications, nodes, logs, traces, profiles, metrics, incidents and alerts.
 
 Add what you need:
 
@@ -109,24 +108,23 @@ COROOT_TOOLSETS=all               # everything, including user and project admin
 
 | Group | What it adds |
 | --- | --- |
-| `diagnose` (default) | Reading applications, nodes, telemetry, incidents, alerts and configuration |
+| `diagnose` (default) | Applications, nodes, telemetry, incidents and alerts |
 | `alerts` | Resolving, suppressing and reopening alerts; alerting rule changes |
 | `dashboards` | Custom dashboards and ad-hoc panel queries |
 | `config` | Categories, custom applications, integrations, instrumentation, pricing |
 | `admin` | Projects, API keys, users and roles |
 
-Finding a project (`list_projects`, `get_project_status`, `health_check`,
-`whoami`) is always available.
+Finding a project (`get_connection`, `get_projects`) is always available.
 
 ### Read-only mode
 
-`COROOT_READ_ONLY=true` (or `--read-only`) removes the 32 mutating tools from
+`COROOT_READ_ONLY=true` (or `--read-only`) removes the 19 mutating tools from
 the server entirely. They do not appear in `tools/list`, so a model cannot call
 one by mistake. Worth setting for anyone pointing a client at production.
 
 It stops writes; it is not a confidentiality control. The reads it leaves in
-place still return a project's telemetry ingestion keys (`list_api_keys`), and
-`get_integration` and `get_db_instrumentation` still reach settings that hold
+place still return a project's telemetry ingestion keys (`get_projects`), and
+`get_integrations` and `get_db_instrumentation` still reach settings that hold
 credentials — those are redacted separately, see below.
 
 ### Credentials in responses
@@ -167,7 +165,7 @@ configuration and exit) and `--version`.
 
 ## What the model gets
 
-**75 tools**, of which 42 are exposed by default. Grouped below by what they touch. Every tool is annotated as
+**44 tools**, of which 20 are exposed by default. Grouped below by what they touch. Every tool is annotated as
 read-only, write or destructive, so clients can prompt for confirmation on the
 ones that change something.
 
@@ -206,34 +204,30 @@ rather than assume the data was complete.
 
 ### Tools
 
-#### Projects and connectivity (11)
+Several tools both list and open: pass an id to get one object in full, omit it
+to list them. Reads and writes are separate tools, so read-only mode and the
+destructive-action hints stay meaningful.
 
+#### Connectivity and projects (5)
 
-- `health_check` - Check that the configured Coroot instance is reachable.
-- `whoami` - Show the authenticated user, their role and their projects.
-- `list_projects` - List the projects (clusters) this account can see.
-- `get_project` - Get a project's settings, refresh interval and API keys.
-- `get_project_status` - Check whether a project is actually collecting telemetry.
-- `list_api_keys` - List a project's telemetry ingestion keys.
-- `create_project`, `update_project`, `delete_project` *(admin)*
-- `create_api_key`, `delete_api_key` *(admin)*
+- `get_connection` - Is Coroot reachable, who are we, and what may we do. Start here when something fails.
+- `get_projects` - List projects, or report one with its settings, telemetry health and ingestion keys.
+- `save_project` - Create a project or rename one. *(admin)*
+- `delete_project` - Delete a project and everything in it. *(admin)*
+- `manage_api_key` - Generate or revoke a telemetry ingestion key. *(admin)*
 
-#### Applications and infrastructure (10)
+#### Applications and infrastructure (6)
 
 - `list_applications` - Applications with health and failing inspections. The triage starting point.
-- `get_application` - One application's audit reports, failing checks and dependencies.
-- `get_service_map` - The dependency graph and each service's health.
-- `list_nodes`, `get_node` - Hosts and their audit reports.
-- `list_deployments` - Recent rollouts and the impact Coroot measured.
-- `list_risks` - Single-instance workloads, unreplicated databases, exposed databases.
-- `get_costs` - Per-node and per-application cost, with over-provisioning.
+- `get_application` - One application's failing checks and dependencies; name a report for its numbers.
+- `get_nodes` - Hosts and their utilisation, or one host's audit report.
+- `get_overview` - Project-wide views: `map` (dependencies), `deployments` (what changed), `risks`, `costs`.
 - `get_application_rca` - Coroot's AI root cause analysis, when Coroot Cloud is configured.
 - `set_risk_status` - Dismiss a risk as accepted, or restore it.
 
-#### Logs, traces, profiles and metrics (10)
+#### Logs, traces, profiles and metrics (9)
 
-- `get_logs` - Search log entries by severity and text, per application or project-wide.
-- `get_log_patterns` - Repeated messages grouped by pattern, with volumes.
+- `get_logs` - Log entries by severity and text, or repeated messages grouped into patterns.
 - `summarize_trace_endpoints` - Per-endpoint request rate, error rate and latency quantiles, worst first.
 - `list_traces` - Individual slow or failed traces, with the ids to open them.
 - `list_trace_error_reasons` - Top failure reasons with a sample trace id each.
@@ -243,35 +237,38 @@ rather than assume the data was complete.
 - `get_metrics` - Run a PromQL range query.
 - `list_metrics` - Discover metric names.
 
-#### Incidents and alerts (13)
+#### Incidents and alerts (6)
 
-- `list_incidents`, `get_incident` - SLO breaches with burn rates and analysis.
-- `list_alerts`, `get_alert` - Alerts from Coroot's alerting rules.
-- `resolve_alerts`, `suppress_alerts`, `reopen_alerts`
-- `list_alerting_rules`, `get_alerting_rule`, `export_alerting_rules`
-- `create_alerting_rule`, `update_alerting_rule`, `delete_alerting_rule`
+- `get_incidents` - SLO breaches, or one incident with its burn rates and analysis.
+- `get_alerts` - Alerts from Coroot's rules, or one with the charts behind it.
+- `set_alert_state` - Resolve, suppress or reopen alerts. *(alerts)*
+- `get_alerting_rules` - Rules, one rule, or all of them as YAML.
+- `save_alerting_rule` - Create a custom rule or replace one. *(alerts)*
+- `delete_alerting_rule` - Delete a custom rule. *(alerts)*
 
-#### Configuration (19)
+#### Configuration (12, all *(config)*)
 
-- `list_inspections`, `get_inspection_config`, `update_inspection_config` - Check thresholds and custom SLOs.
-- `list_application_categories`, `save_application_category`, `delete_application_category`
-- `list_custom_applications`, `save_custom_application`, `delete_custom_application`
-- `list_integrations`, `get_integration`, `configure_integration`, `delete_integration`
-- `get_db_instrumentation`, `configure_db_instrumentation` - Let Coroot collect database statistics.
+- `get_inspections` - Health checks with their thresholds, or one check's configuration.
+- `update_inspection_config` - Change a threshold or define a custom SLO.
+- `get_project_config` - Read categories, custom applications, pricing or instance settings.
+- `save_application_category` / `save_custom_application` - Create or update either.
+- `delete_project_config` - Remove a category, custom application or integration.
+- `get_integrations` / `configure_integration` - Read or configure notifications and data sources.
+- `get_db_instrumentation` / `configure_db_instrumentation` - Let Coroot collect database statistics.
 - `link_telemetry_service` - Map an OpenTelemetry service name onto an application.
-- `get_cloud_pricing`, `set_cloud_pricing` (omit both prices to reset)
-- `get_server_settings`
+- `set_cloud_pricing` - Override the rates used for cost estimates, or reset them.
 
-#### Dashboards (7)
+#### Dashboards (3, all *(dashboards)*)
 
-- `list_dashboards`, `get_dashboard`, `create_dashboard`, `update_dashboard`
-- `update_dashboard_panels`, `delete_dashboard`
-- `get_panel_data` - Evaluate PromQL queries as a chart without saving a dashboard.
+- `get_dashboards` - List dashboards, or open one verbatim for editing.
+- `save_dashboard` - Create, rename, or replace a dashboard's panels.
+- `delete_dashboard` - Delete a dashboard.
 
-#### Users and roles (5)
+#### Users (3, all *(admin)*)
 
-- `list_users`, `list_roles`
-- `create_user`, `update_user`, `delete_user`
+- `get_users` - Users and the roles they can hold, optionally with permissions.
+- `save_user` - Create or update a user.
+- `delete_user` - Delete a user.
 
 ## Examples
 
@@ -332,12 +329,12 @@ suite needs no network and no running instance.
 Version 1.0 is a rewrite. Configuration is compatible, but tool names are not:
 
 - Settings no longer come from a `.env` file. 0.1.x loaded one automatically; 1.0 reads the process environment only, so export the variables or pass them in your MCP client's `env` block.
-- Overviews became verbs: `get_applications_overview` is now `list_applications`, `get_nodes_overview` is `list_nodes`, `get_deployments_overview` is `list_deployments`, `get_risks_overview` is `list_risks`, `get_traces_overview` is `summarize_trace_endpoints`.
-- Telemetry tools were split by intent: `get_application_traces` became `summarize_trace_endpoints`, `list_traces`, `list_trace_error_reasons`, `explain_trace_latency` and `get_trace_by_id`; `get_application_logs` became `get_logs` and `get_log_patterns`; `get_application_profiling` became `get_profile`.
-- Renamed: `get_current_user` is `whoami`, `get_roles` is `list_roles`, `get_application_categories` is `list_application_categories`, `get_custom_applications` is `list_custom_applications`, `update_project_settings` is `update_project`, `update_db_instrumentation` is `configure_db_instrumentation`, `update_application_risks` is `set_risk_status`, `get_custom_cloud_pricing` is `get_cloud_pricing`, `update_custom_cloud_pricing` is `set_cloud_pricing`, `delete_custom_cloud_pricing` is `reset_cloud_pricing`.
-- Merged: `create_application_category` and `update_application_category` are `save_application_category`; `update_custom_applications` is `save_custom_application` and `delete_custom_application`; `update_current_user` is `update_user` and `change_password`; `get_sso_config` and `get_ai_config` are `get_server_settings`; `test_integration` is `configure_integration(test_only=true)`.
-- Removed with no replacement: `update_sso_config` and `update_ai_config`. Those settings are readable through `get_server_settings` but no longer writable.
-- Also removed: `change_password` (its success invalidates the credential this server authenticates with), `set_notification_base_url` (an install-day setting) and `delete_custom_cloud_pricing` (call `set_cloud_pricing` with no prices to reset).
+- Overviews merged into `get_overview(view=...)`: `get_applications_overview` is now `list_applications`, and `get_nodes_overview` is `get_nodes`; `get_deployments_overview`, `get_risks_overview` and the service map are `get_overview` with `view` set to `deployments`, `risks` or `map`. `get_traces_overview` is `summarize_trace_endpoints`.
+- Telemetry tools were split by intent: `get_application_traces` became `summarize_trace_endpoints`, `list_traces`, `list_trace_error_reasons`, `explain_trace_latency` and `get_trace_by_id`; `get_application_logs` became `get_logs`, which groups repeated messages when called with `view="patterns"`; `get_application_profiling` became `get_profile`.
+- Reads merged with their list tools: `get_project_status` and `list_api_keys` are `get_projects`; `get_incident`, `get_alert`, `get_alerting_rule` and the YAML export are `get_incidents`, `get_alerts` and `get_alerting_rules`; `get_check_config` is `get_inspections`; categories, custom applications, pricing and instance settings are all `get_project_config(what=...)`; `get_dashboard` is `get_dashboards`; `list_roles` folded into `get_users`.
+- Create and update merged into one `save_` tool each: `save_project`, `save_application_category`, `save_custom_application`, `save_alerting_rule`, `save_dashboard`, `save_user`. Deletes of project-scoped configuration are `delete_project_config(what=...)`.
+- Renamed: `get_current_user` folded into `get_connection`, `update_db_instrumentation` is `configure_db_instrumentation`, `update_application_risks` is `set_risk_status`, `update_custom_cloud_pricing` is `set_cloud_pricing`, `test_integration` is `configure_integration(test_only=true)`, and `resolve_alerts` / `suppress_alerts` / `reopen_alerts` are `set_alert_state(state=...)`.
+- Removed with no replacement: `update_sso_config` and `update_ai_config`, `change_password` (its success invalidates the credential this server authenticates with), `set_notification_base_url` (an install-day setting), `create_or_update_role` (Coroot answers 405 in every edition) and `delete_custom_cloud_pricing` (call `set_cloud_pricing` with no prices to reset).
 - Failures are reported as MCP tool errors instead of `{"success": false}` payloads.
 - Numeric and list arguments are real numbers and lists. The 0.1.x string workarounds (`sample_rate` as `"0.1"`, `excluded_paths` as a JSON string) are gone.
 - New areas: incidents, alerts, alerting rules, the service map, costs, PromQL queries and Coroot Cloud status.

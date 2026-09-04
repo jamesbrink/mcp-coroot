@@ -10,7 +10,7 @@ from pydantic import Field
 from ...client.ids import normalize_app_id
 from ...client.timerange import ms_to_iso
 from ...config import Settings
-from ..app import CREATE, DESTRUCTIVE, READ_ONLY, WRITE
+from ..app import DESTRUCTIVE, READ_ONLY, WRITE
 from ..compact import compact, limit_items, status_counts
 from ..errors import guard
 from ..state import AppState, ToolContext
@@ -20,7 +20,7 @@ from ._common import FromParam, ProjectIdParam, ToParam, ok, respond, target
 MAX_SCAN = 1000
 
 AlertIdsParam = Annotated[
-    list[str], Field(description="Alert ids from list_alerts.", min_length=1)
+    list[str], Field(description="Alert ids from get_alerts.", min_length=1)
 ]
 
 
@@ -70,39 +70,74 @@ def _alert_digest(alert: dict[str, Any]) -> dict[str, Any]:
 
 
 def register(mcp: MCPServer[AppState], settings: Settings) -> None:
-    @mcp.tool(title="List SLO incidents", annotations=READ_ONLY)
+    @mcp.tool(title="Get SLO incidents", annotations=READ_ONLY)
     @guard
-    async def list_incidents(
+    async def get_incidents(
         ctx: ToolContext,
         project_id: ProjectIdParam = None,
+        incident_key: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Open one incident in full, with its SLO breach detail and "
+                    "root cause analysis. Omit to list them."
+                )
+            ),
+        ] = None,
         state_filter: Annotated[
             Literal["open", "resolved", "any"],
-            Field(description="Which incidents to return."),
+            Field(description="Which incidents to list."),
         ] = "any",
         app_id: Annotated[
             str | None, Field(description="Only incidents for this application id.")
         ] = None,
         limit: Annotated[
-            int, Field(description="Maximum incidents to return.", ge=1, le=500)
+            int, Field(description="Maximum incidents to list.", ge=1, le=500)
         ] = 50,
         from_time: FromParam = None,
         to_time: ToParam = None,
     ) -> dict[str, Any]:
-        """List SLO incidents: availability or latency objectives being violated.
+        """List SLO incidents, or open one by key.
 
-        Open incidents come first, then the most recent resolved ones. Use
-        get_incident for the full analysis of one.
+        An incident is an availability or latency objective being violated. Open
+        ones are listed first, then the most recent resolved. Pass incident_key
+        for the full analysis of one: its burn rates, the SLO it broke, and
+        Coroot's root cause analysis if it ran.
         """
         state, pid = await target(ctx, project_id)
-        wanted = state_filter
+        if incident_key:
+            result = await state.coroot.incidents.get(pid, incident_key)
+            data = result.data if isinstance(result.data, dict) else {}
+            rca = data.get("rca") or {}
+            return respond(
+                state,
+                {
+                    "project_id": pid,
+                    **_incident_digest(data),
+                    "availability_slo": data.get("availability_slo"),
+                    "latency_slo": data.get("latency_slo"),
+                    "actual_from": ms_to_iso(data.get("actual_from")),
+                    "actual_to": ms_to_iso(data.get("actual_to")),
+                    "details": compact(data.get("details")),
+                    "rca": {
+                        "status": rca.get("status"),
+                        "summary": rca.get("short_summary"),
+                        "root_cause": rca.get("root_cause"),
+                        "immediate_fixes": rca.get("immediate_fixes"),
+                    }
+                    if isinstance(rca, dict) and rca
+                    else None,
+                },
+            )
+
         # Coroot filters neither by state nor by application, so a filtered
         # request has to scan more rows than it returns.
-        filtering = wanted != "any" or app_id is not None
+        filtering = state_filter != "any" or app_id is not None
         scan = min(max(limit * 5, 200), MAX_SCAN) if filtering else limit
-        result = await state.coroot.incidents.list(
+        listed = await state.coroot.incidents.list(
             pid, limit=scan, from_=from_time, to=to_time
         )
-        incidents = [i for i in (result.data or []) if isinstance(i, dict)]
+        incidents = [i for i in (listed.data or []) if isinstance(i, dict)]
         digests = [_incident_digest(i) for i in incidents]
         wanted_app = normalize_app_id(app_id, project_id=pid) if app_id else None
         matched = [
@@ -110,9 +145,9 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
             for d in digests
             if (wanted_app is None or d.get("application_id") == wanted_app)
             and (
-                wanted == "any"
-                or (wanted == "open" and d["open"])
-                or (wanted == "resolved" and not d["open"])
+                state_filter == "any"
+                or (state_filter == "open" and d["open"])
+                or (state_filter == "resolved" and not d["open"])
             )
         ]
         kept, omitted = limit_items(matched, limit)
@@ -137,53 +172,23 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
             },
         )
 
-    @mcp.tool(title="Get incident details", annotations=READ_ONLY)
+    @mcp.tool(title="Get alerts", annotations=READ_ONLY)
     @guard
-    async def get_incident(
-        ctx: ToolContext,
-        incident_key: Annotated[
-            str, Field(description="Incident key from list_incidents.")
-        ],
-        project_id: ProjectIdParam = None,
-    ) -> dict[str, Any]:
-        """Get one incident with its SLO breach details and root cause analysis.
-
-        The time window is set to the incident automatically, so charts cover the
-        right period.
-        """
-        state, pid = await target(ctx, project_id)
-        result = await state.coroot.incidents.get(pid, incident_key)
-        data = result.data if isinstance(result.data, dict) else {}
-        rca = data.get("rca") or {}
-        return respond(
-            state,
-            {
-                "project_id": pid,
-                **_incident_digest(data),
-                "availability_slo": data.get("availability_slo"),
-                "latency_slo": data.get("latency_slo"),
-                "actual_from": ms_to_iso(data.get("actual_from")),
-                "actual_to": ms_to_iso(data.get("actual_to")),
-                "details": compact(data.get("details")),
-                "rca": {
-                    "status": rca.get("status"),
-                    "summary": rca.get("short_summary"),
-                    "root_cause": rca.get("root_cause"),
-                    "immediate_fixes": rca.get("immediate_fixes"),
-                }
-                if isinstance(rca, dict) and rca
-                else None,
-            },
-        )
-
-    @mcp.tool(title="List alerts", annotations=READ_ONLY)
-    @guard
-    async def list_alerts(
+    async def get_alerts(
         ctx: ToolContext,
         project_id: ProjectIdParam = None,
+        alert_id: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Open one alert in full, with the charts behind it. Omit to "
+                    "list them."
+                )
+            ),
+        ] = None,
         state_filter: Annotated[
             Literal["firing", "resolved", "any"],
-            Field(description="Which alerts to return."),
+            Field(description="Which alerts to list."),
         ] = "firing",
         search: Annotated[
             str | None,
@@ -193,7 +198,7 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
             str | None, Field(description="Only alerts for this application id.")
         ] = None,
         limit: Annotated[
-            int, Field(description="Maximum alerts to return.", ge=1, le=1000)
+            int, Field(description="Maximum alerts to list.", ge=1, le=1000)
         ] = 50,
         offset: Annotated[
             int,
@@ -206,28 +211,45 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
             ),
         ] = 0,
     ) -> dict[str, Any]:
-        """List alerts raised by Coroot's alerting rules.
+        """List alerts raised by Coroot's alerting rules, or open one by id.
 
         Firing alerts are what needs attention now. Each entry carries the rule
         that produced it and the application it concerns.
         """
         state, pid = await target(ctx, project_id)
-        wanted = state_filter
+        if alert_id:
+            result = await state.coroot.alerts.get(pid, alert_id)
+            data = result.data if isinstance(result.data, dict) else {}
+            return respond(
+                state,
+                {
+                    "project_id": pid,
+                    **_alert_digest(data),
+                    "rule_id": data.get("rule_id"),
+                    "report": data.get("report"),
+                    "details": data.get("details"),
+                    "notifications": data.get("notifications"),
+                    "widgets": compact(data.get("widgets")),
+                },
+            )
+
         # Coroot matches `search` against the application id server-side, which
         # is the only way to filter by application without scanning every page.
+        server_search = normalize_app_id(app_id, project_id=pid) if app_id else search
         # It cannot return resolved alerts alone, so that state is filtered here
         # and needs a wider scan than the caller asked for.
-        server_search = normalize_app_id(app_id, project_id=pid) if app_id else search
-        filtering = wanted == "resolved" or app_id is not None or search is not None
+        filtering = (
+            state_filter == "resolved" or app_id is not None or search is not None
+        )
         scan = min(max(limit * 5, 200), MAX_SCAN) if filtering else limit
-        result = await state.coroot.alerts.list(
+        listed = await state.coroot.alerts.list(
             pid,
-            include_resolved=wanted != "firing",
+            include_resolved=state_filter != "firing",
             search=server_search,
             limit=scan,
             offset=offset,
         )
-        data = result.data if isinstance(result.data, dict) else {}
+        data = listed.data if isinstance(listed.data, dict) else {}
         alerts = [a for a in (data.get("alerts") or []) if isinstance(a, dict)]
         digests = [_alert_digest(a) for a in alerts]
         needle = (search or "").lower()
@@ -237,9 +259,9 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
             for d in digests
             if (wanted_app is None or d.get("application_id") == wanted_app)
             and (
-                wanted == "any"
-                or (wanted == "firing" and d["firing"])
-                or (wanted == "resolved" and not d["firing"])
+                state_filter == "any"
+                or (state_filter == "firing" and d["firing"])
+                or (state_filter == "resolved" and not d["firing"])
             )
             and (
                 not needle
@@ -269,44 +291,49 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
                 "alerts": kept,
                 "note": (
                     f"Only the {len(digests)} most recent alerts were scanned; "
-                    "older ones may also match."
+                    "raise offset to reach older ones."
                 )
                 if filtering and len(digests) >= scan
                 else None,
             },
         )
 
-    @mcp.tool(title="Get alert details", annotations=READ_ONLY)
+    @mcp.tool(title="Get alerting rules", annotations=READ_ONLY)
     @guard
-    async def get_alert(
+    async def get_alerting_rules(
         ctx: ToolContext,
-        alert_id: Annotated[str, Field(description="Alert id from list_alerts.")],
         project_id: ProjectIdParam = None,
+        rule_id: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Return one rule's full definition. Omit to list them all."
+                )
+            ),
+        ] = None,
+        as_yaml: Annotated[
+            bool,
+            Field(
+                description=(
+                    "Return every rule as YAML for Coroot's configuration file "
+                    "instead of as a listing."
+                )
+            ),
+        ] = False,
     ) -> dict[str, Any]:
-        """Get one alert with the details and charts behind it."""
-        state, pid = await target(ctx, project_id)
-        result = await state.coroot.alerts.get(pid, alert_id)
-        data = result.data if isinstance(result.data, dict) else {}
-        return respond(
-            state,
-            {
-                "project_id": pid,
-                **_alert_digest(data),
-                "rule_id": data.get("rule_id"),
-                "report": data.get("report"),
-                "details": data.get("details"),
-                "notifications": data.get("notifications"),
-                "widgets": compact(data.get("widgets")),
-            },
-        )
+        """List alerting rules, open one, or export them all as YAML.
 
-    @mcp.tool(title="List alerting rules", annotations=READ_ONLY)
-    @guard
-    async def list_alerting_rules(
-        ctx: ToolContext, project_id: ProjectIdParam = None
-    ) -> dict[str, Any]:
-        """List alerting rules, built-in and custom, with how many alerts each fired."""
+        Explains why something did or did not alert. Built-in rules are marked;
+        they can be disabled but not deleted.
+        """
         state, pid = await target(ctx, project_id)
+        if as_yaml:
+            yaml = await state.coroot.alerting_rules.export(pid)
+            return respond(state, {"project_id": pid, "yaml": yaml})
+        if rule_id:
+            rule = await state.coroot.alerting_rules.get(pid, rule_id)
+            return respond(state, {"project_id": pid, **rule})
+
         result = await state.coroot.alerting_rules.list(pid)
         data = result.data if isinstance(result.data, dict) else {}
         rules = [r for r in (data.get("rules") or []) if isinstance(r, dict)]
@@ -337,81 +364,51 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
             },
         )
 
-    @mcp.tool(title="Get an alerting rule", annotations=READ_ONLY)
-    @guard
-    async def get_alerting_rule(
-        ctx: ToolContext,
-        rule_id: Annotated[str, Field(description="Rule id from list_alerting_rules.")],
-        project_id: ProjectIdParam = None,
-    ) -> dict[str, Any]:
-        """Get one alerting rule's full definition, including its condition."""
-        state, pid = await target(ctx, project_id)
-        rule = await state.coroot.alerting_rules.get(pid, rule_id)
-        return respond(state, {"project_id": pid, **rule})
-
-    @mcp.tool(title="Export alerting rules", annotations=READ_ONLY)
-    @guard
-    async def export_alerting_rules(
-        ctx: ToolContext, project_id: ProjectIdParam = None
-    ) -> dict[str, Any]:
-        """Export every alerting rule as YAML for Coroot's configuration file."""
-        state, pid = await target(ctx, project_id)
-        yaml = await state.coroot.alerting_rules.export(pid)
-        return respond(state, {"project_id": pid, "yaml": yaml})
-
     # Acting on alerts and editing rules belong to the alerts group.
     if settings.read_only or not settings.enabled("alerts"):
         return
 
-    @mcp.tool(title="Resolve alerts", annotations=DESTRUCTIVE)
+    @mcp.tool(title="Change alert state", annotations=DESTRUCTIVE)
     @guard
-    async def resolve_alerts(
+    async def set_alert_state(
         ctx: ToolContext,
         alert_ids: AlertIdsParam,
+        action: Annotated[
+            Literal["resolve", "suppress", "reopen"],
+            Field(
+                description=(
+                    "resolve: mark fixed and notify the configured channels. "
+                    "suppress: silence without resolving. reopen: undo either."
+                )
+            ),
+        ],
         project_id: ProjectIdParam = None,
     ) -> dict[str, Any]:
-        """Mark alerts as resolved, notifying the configured channels.
+        """Resolve, suppress or reopen alerts.
 
-        Only do this once the underlying problem is actually fixed: an alert whose
-        condition still holds fires again at the next evaluation.
+        Resolving notifies whoever is on call, so only do it once the underlying
+        problem is actually fixed: an alert whose condition still holds fires
+        again at the next evaluation. Suppress silences a known or planned
+        condition instead. Both hide the alert from the default alert listing.
         """
         state, pid = await target(ctx, project_id)
-        await state.coroot.alerts.resolve(pid, alert_ids)
-        return ok(f"Resolved {len(alert_ids)} alert(s)", project_id=pid)
+        call = {
+            "resolve": state.coroot.alerts.resolve,
+            "suppress": state.coroot.alerts.suppress,
+            "reopen": state.coroot.alerts.reopen,
+        }[action]
+        await call(pid, alert_ids)
+        return ok(f"{action}d {len(alert_ids)} alert(s)", project_id=pid)
 
-    @mcp.tool(title="Suppress alerts", annotations=DESTRUCTIVE)
+    @mcp.tool(title="Create or update an alerting rule", annotations=WRITE)
     @guard
-    async def suppress_alerts(
-        ctx: ToolContext,
-        alert_ids: AlertIdsParam,
-        project_id: ProjectIdParam = None,
-    ) -> dict[str, Any]:
-        """Silence alerts without resolving them, for known or planned conditions."""
-        state, pid = await target(ctx, project_id)
-        await state.coroot.alerts.suppress(pid, alert_ids)
-        return ok(f"Suppressed {len(alert_ids)} alert(s)", project_id=pid)
-
-    @mcp.tool(title="Reopen alerts", annotations=WRITE)
-    @guard
-    async def reopen_alerts(
-        ctx: ToolContext,
-        alert_ids: AlertIdsParam,
-        project_id: ProjectIdParam = None,
-    ) -> dict[str, Any]:
-        """Reopen alerts that were resolved or suppressed too early."""
-        state, pid = await target(ctx, project_id)
-        await state.coroot.alerts.reopen(pid, alert_ids)
-        return ok(f"Reopened {len(alert_ids)} alert(s)", project_id=pid)
-
-    @mcp.tool(title="Create an alerting rule", annotations=CREATE)
-    @guard
-    async def create_alerting_rule(
+    async def save_alerting_rule(
         ctx: ToolContext,
         rule: Annotated[
             dict[str, Any],
             Field(
                 description=(
-                    "Rule definition. Required: name, severity ('warning' or "
+                    "The complete rule. Required: name, severity ('warning' or "
                     "'critical'), enabled, source and selector. source is "
                     '{"type": "check", "check": {"check_id": "CPUContainer"}} or '
                     '{"type": "promql", "promql": {"expression": "..."}} or '
@@ -424,53 +421,40 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
                 )
             ),
         ],
-        project_id: ProjectIdParam = None,
-    ) -> dict[str, Any]:
-        """Create a custom alerting rule.
-
-        Look at an existing rule with get_alerting_rule first to copy its shape.
-        """
-        state, pid = await target(ctx, project_id)
-        created = await state.coroot.alerting_rules.create(pid, rule)
-        rule_id = created.get("id") if isinstance(created, dict) else None
-        return ok("Created alerting rule", project_id=pid, rule_id=rule_id)
-
-    @mcp.tool(title="Update an alerting rule", annotations=DESTRUCTIVE)
-    @guard
-    async def update_alerting_rule(
-        ctx: ToolContext,
-        rule_id: Annotated[str, Field(description="Rule id from list_alerting_rules.")],
-        rule: Annotated[
-            dict[str, Any],
+        rule_id: Annotated[
+            str | None,
             Field(
                 description=(
-                    "The complete rule definition, as returned by "
-                    "get_alerting_rule with your changes applied. Fields left out "
-                    "are cleared."
+                    "Update this rule instead of creating one. Fields left out "
+                    "of `rule` are cleared, so send the whole object."
                 )
             ),
-        ],
+        ] = None,
         project_id: ProjectIdParam = None,
     ) -> dict[str, Any]:
-        """Update an alerting rule, or enable and disable a built-in one.
+        """Create a custom alerting rule, or replace an existing one.
 
-        Fetch the current definition with get_alerting_rule, change what you need
-        and send the whole object back.
+        Read an existing rule with get_alerting_rules first to copy its shape.
+        Built-in rules can be updated (to disable one, say) but not created.
         """
         state, pid = await target(ctx, project_id)
-        await state.coroot.alerting_rules.update(pid, rule_id, rule)
-        return ok(f"Updated rule {rule_id}", project_id=pid, rule_id=rule_id)
+        if rule_id:
+            await state.coroot.alerting_rules.update(pid, rule_id, rule)
+            return ok(f"Updated rule {rule_id}", project_id=pid, rule_id=rule_id)
+        created = await state.coroot.alerting_rules.create(pid, rule)
+        new_id = created.get("id") if isinstance(created, dict) else None
+        return ok("Created alerting rule", project_id=pid, rule_id=new_id)
 
     @mcp.tool(title="Delete an alerting rule", annotations=DESTRUCTIVE)
     @guard
     async def delete_alerting_rule(
         ctx: ToolContext,
-        rule_id: Annotated[str, Field(description="Rule id from list_alerting_rules.")],
+        rule_id: Annotated[str, Field(description="Rule id from get_alerting_rules.")],
         project_id: ProjectIdParam = None,
     ) -> dict[str, Any]:
         """Delete a custom alerting rule and resolve the alerts it raised.
 
-        Built-in rules cannot be deleted; disable them with update_alerting_rule.
+        Built-in rules cannot be deleted; disable them with save_alerting_rule.
         """
         state, pid = await target(ctx, project_id)
         await state.coroot.alerting_rules.delete(pid, rule_id)
