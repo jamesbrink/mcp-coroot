@@ -13,7 +13,7 @@ from .. import __version__
 from ..client import CorootClient
 from ..config import Settings
 from .instructions import INSTRUCTIONS
-from .state import AppState
+from .state import AppState, StateHolder
 
 logger = logging.getLogger("mcp_coroot.server")
 
@@ -54,6 +54,7 @@ def build_server(
     do not appear in ``tools/list`` at all.
     """
     make_client = client_factory or (lambda s: CorootClient(s))
+    holder = StateHolder()
 
     @asynccontextmanager
     async def lifespan(_: MCPServer[AppState]) -> AsyncIterator[AppState]:
@@ -65,9 +66,12 @@ def build_server(
             settings.auth_mode,
             ", read-only" if settings.read_only else "",
         )
+        state = AppState(settings=settings, coroot=coroot)
+        holder.set(state)
         try:
-            yield AppState(settings=settings, coroot=coroot)
+            yield state
         finally:
+            holder.set(None)
             await coroot.aclose()
 
     server: MCPServer[AppState] = MCPServer(
@@ -79,7 +83,10 @@ def build_server(
         lifespan=lifespan,
     )
 
+    from . import prompts, resources
     from .tools import register_all
 
     register_all(server, settings)
+    resources.register(server, holder)
+    prompts.register(server)
     return server
