@@ -244,7 +244,9 @@ async def test_integration_read_and_delete(
         message = await call_error(
             client, "get_integration", integration_type="carrier-pigeon"
         )
-    assert "integration_type must be one of" in message
+    # Rejected by the schema enum before the tool body runs.
+    assert "integration_type" in message
+    assert "slack" in message
 
 
 async def test_db_instrumentation_read(fake: FakeCoroot, settings: Settings) -> None:
@@ -269,7 +271,8 @@ async def test_db_instrumentation_read(fake: FakeCoroot, settings: Settings) -> 
             app_id="ns:StatefulSet:pg",
             db_type="oracle",
         )
-    assert "db_type must be one of" in message
+    assert "db_type" in message
+    assert "postgres" in message
 
 
 async def test_link_telemetry_service(fake: FakeCoroot, settings: Settings) -> None:
@@ -292,7 +295,8 @@ async def test_link_telemetry_service(fake: FakeCoroot, settings: Settings) -> N
             kind="metrics",
             service="x",
         )
-    assert "kind must be one of" in message
+    assert "kind" in message
+    assert "tracing" in message
 
 
 # -- pricing and server settings --------------------------------------------

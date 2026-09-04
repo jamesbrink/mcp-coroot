@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from mcp.server.mcpserver import MCPServer
 from pydantic import Field
@@ -11,7 +11,7 @@ from ...client.ids import normalize_app_id
 from ...config import Settings
 from ..app import READ_ONLY, WRITE
 from ..compact import compact, limit_items, status_counts
-from ..errors import guard, one_of
+from ..errors import guard
 from ..state import AppState, ToolContext
 from ._common import AppIdParam, FromParam, ProjectIdParam, ToParam, ok, respond, target
 
@@ -47,13 +47,8 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
         ctx: ToolContext,
         project_id: ProjectIdParam = None,
         status: Annotated[
-            str | None,
-            Field(
-                description=(
-                    "Only return applications at this status: 'ok', 'info', "
-                    "'warning', 'critical' or 'unknown'. Omit for all."
-                )
-            ),
+            Literal["ok", "info", "warning", "critical", "unknown"] | None,
+            Field(description="Only return applications at this status."),
         ] = None,
         category: Annotated[
             str | None,
@@ -79,8 +74,7 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
         apps = [a for a in (result.data or []) if isinstance(a, dict)]
         digests = [_app_digest(a) for a in apps]
         if status:
-            wanted = status.strip().lower()
-            digests = [a for a in digests if a.get("status") == wanted]
+            digests = [a for a in digests if a.get("status") == status]
         if category:
             digests = [a for a in digests if a.get("category") == category.strip()]
         kept, omitted = limit_items(digests, limit)
@@ -463,7 +457,7 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
             ),
         ],
         action: Annotated[
-            str,
+            Literal["dismiss", "activate"],
             Field(
                 description=(
                     "'dismiss' to accept the risk, 'activate' to track it again."
@@ -480,16 +474,15 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
     ) -> dict[str, Any]:
         """Dismiss a detected risk as accepted, or bring a dismissed one back."""
         state, pid = await target(ctx, project_id)
-        choice = one_of(action, ("dismiss", "activate"), name="action")
         await state.coroot.applications.set_risk_override(
             pid,
             app_id,
-            action="dismiss" if choice == "dismiss" else "mark_as_active",
+            action="dismiss" if action == "dismiss" else "mark_as_active",
             category=risk_category,
             risk_type=risk_type,
             reason=reason,
         )
         return ok(
-            f"Risk {risk_type} {'dismissed' if choice == 'dismiss' else 'reactivated'}",
+            f"Risk {risk_type} {'dismissed' if action == 'dismiss' else 'reactivated'}",
             application_id=normalize_app_id(app_id, project_id=pid),
         )

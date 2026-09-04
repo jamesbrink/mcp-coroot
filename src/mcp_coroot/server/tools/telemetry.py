@@ -107,14 +107,23 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
         limit: Annotated[
             int, Field(description="Maximum entries to return.", ge=1, le=1000)
         ] = 100,
+        since: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Continue after an earlier call: pass the next_since value "
+                    "it returned to get entries newer than the last one seen."
+                )
+            ),
+        ] = None,
         from_time: FromParam = None,
         to_time: ToParam = None,
     ) -> dict[str, Any]:
         """Search log entries, newest first, for one application or a whole project.
 
         Requires ClickHouse in Coroot. Start narrow: a one-hour window with a
-        severity filter. If the response says it was truncated, shorten the window
-        or lower the limit rather than paging blindly.
+        severity filter. To continue past the entries returned, pass the
+        response's next_since value back as `since`.
         """
         state, pid = await target(ctx, project_id)
         for level in severity or []:
@@ -126,11 +135,22 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
         filters = _log_filters(severity, search, trace_id)
         if app_id:
             result = await state.coroot.applications.logs(
-                pid, app_id, filters=filters, limit=limit, from_=from_time, to=to_time
+                pid,
+                app_id,
+                filters=filters,
+                limit=limit,
+                since=since,
+                from_=from_time,
+                to=to_time,
             )
         else:
             result = await state.coroot.overview.logs(
-                pid, filters=filters, limit=limit, from_=from_time, to=to_time
+                pid,
+                filters=filters,
+                limit=limit,
+                since=since,
+                from_=from_time,
+                to=to_time,
             )
         data = result.data if isinstance(result.data, dict) else {}
         entries = [e for e in (data.get("entries") or []) if isinstance(e, dict)]

@@ -618,9 +618,12 @@ async def test_incidents_and_alerts(
 async def test_state_filter_validation(
     one_project: FakeCoroot, settings: Settings
 ) -> None:
+    # The value is a schema enum, so the SDK rejects it before the tool runs and
+    # the message names the values that would have worked.
     async with make_client(one_project, settings) as client:
         message = await call_error(client, "list_alerts", state_filter="exploding")
-        assert "state_filter must be one of" in message
+        assert "state_filter" in message
+        assert "firing" in message and "resolved" in message
 
 
 async def test_alerting_rule_lifecycle(
