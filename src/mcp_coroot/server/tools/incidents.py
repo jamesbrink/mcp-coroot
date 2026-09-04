@@ -15,6 +15,9 @@ from ..errors import guard, one_of
 from ..state import AppState, ToolContext
 from ._common import FromParam, ProjectIdParam, ToParam, ok, respond, target
 
+#: Widest page this server will pull when it has to filter client-side.
+MAX_SCAN = 1000
+
 AlertIdsParam = Annotated[
     list[str], Field(description="Alert ids from list_alerts.", min_length=1)
 ]
@@ -76,26 +79,42 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
         """
         state, pid = await target(ctx, project_id)
         wanted = one_of(state_filter, ("open", "resolved", "any"), name="state_filter")
+        # Coroot filters neither by state nor by application, so a filtered
+        # request has to scan more rows than it returns.
+        filtering = wanted != "any" or app_id is not None
+        scan = min(max(limit * 5, 200), MAX_SCAN) if filtering else limit
         result = await state.coroot.incidents.list(
-            pid, limit=limit, from_=from_time, to=to_time
+            pid, limit=scan, from_=from_time, to=to_time
         )
         incidents = [i for i in (result.data or []) if isinstance(i, dict)]
         digests = [_incident_digest(i) for i in incidents]
-        if app_id:
-            digests = [d for d in digests if d.get("application_id") == app_id]
-        if wanted == "open":
-            digests = [d for d in digests if d["open"]]
-        elif wanted == "resolved":
-            digests = [d for d in digests if not d["open"]]
-        kept, omitted = limit_items(digests, limit)
+        matched = [
+            d
+            for d in digests
+            if (app_id is None or d.get("application_id") == app_id)
+            and (
+                wanted == "any"
+                or (wanted == "open" and d["open"])
+                or (wanted == "resolved" and not d["open"])
+            )
+        ]
+        kept, omitted = limit_items(matched, limit)
         return respond(
             state,
             {
                 "project_id": pid,
-                "total": len(digests),
-                "open": sum(1 for d in digests if d["open"]),
+                "scanned": len(digests),
+                "matched": len(matched),
+                "returned": len(kept),
                 "omitted": omitted or None,
+                "open_in_scan": sum(1 for d in digests if d["open"]),
                 "incidents": kept,
+                "note": (
+                    f"Only the {len(digests)} most recent incidents were scanned; "
+                    "older ones may also match. Narrow the time range to see them."
+                )
+                if filtering and len(digests) >= scan
+                else None,
             },
         )
 
@@ -167,33 +186,61 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
         wanted = one_of(
             state_filter, ("firing", "resolved", "any"), name="state_filter"
         )
+        # Coroot matches `search` against the application id server-side, which
+        # is the only way to filter by application without scanning every page.
+        server_search = app_id or search
+        # It cannot return resolved alerts alone, so that state is filtered here
+        # and needs a wider scan than the caller asked for.
+        filtering = wanted == "resolved" or app_id is not None or search is not None
+        scan = min(max(limit * 5, 200), MAX_SCAN) if filtering else limit
         result = await state.coroot.alerts.list(
             pid,
             include_resolved=wanted != "firing",
-            search=search,
-            limit=limit,
+            search=server_search,
+            limit=scan,
         )
         data = result.data if isinstance(result.data, dict) else {}
         alerts = [a for a in (data.get("alerts") or []) if isinstance(a, dict)]
         digests = [_alert_digest(a) for a in alerts]
-        if app_id:
-            digests = [d for d in digests if d.get("application_id") == app_id]
-        if wanted == "resolved":
-            digests = [d for d in digests if not d["firing"]]
-        elif wanted == "firing":
-            digests = [d for d in digests if d["firing"]]
-        kept, omitted = limit_items(digests, limit)
+        needle = (search or "").lower()
+        matched = [
+            d
+            for d in digests
+            if (app_id is None or d.get("application_id") == app_id)
+            and (
+                wanted == "any"
+                or (wanted == "firing" and d["firing"])
+                or (wanted == "resolved" and not d["firing"])
+            )
+            and (
+                not needle
+                or needle in str(d.get("summary") or "").lower()
+                or needle in str(d.get("rule") or "").lower()
+                or needle in str(d.get("application_id") or "").lower()
+            )
+        ]
+        kept, omitted = limit_items(matched, limit)
         return respond(
             state,
             {
                 "project_id": pid,
-                "firing": data.get("firing"),
-                "resolved": data.get("resolved"),
-                "total": data.get("total"),
+                "project_totals": {
+                    "firing": data.get("firing"),
+                    "resolved": data.get("resolved"),
+                    "total": data.get("total"),
+                },
+                "scanned": len(digests),
+                "matched": len(matched),
                 "returned": len(kept),
                 "omitted": omitted or None,
                 "by_severity": status_counts(alerts, key="severity"),
                 "alerts": kept,
+                "note": (
+                    f"Only the {len(digests)} most recent alerts were scanned; "
+                    "older ones may also match."
+                )
+                if filtering and len(digests) >= scan
+                else None,
             },
         )
 

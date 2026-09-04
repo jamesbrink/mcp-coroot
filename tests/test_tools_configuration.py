@@ -1010,3 +1010,110 @@ async def test_profile_reports_when_a_category_has_no_data(
             instance="api-1",
         )
     assert "No profiles found" in result["message"]
+
+
+async def test_alert_filters_scan_beyond_the_requested_limit(
+    fake: FakeCoroot, settings: Settings
+) -> None:
+    # Coroot cannot return resolved alerts on their own: asking for them yields a
+    # page of firing ones first. Filtering only the caller's page would report
+    # zero resolved alerts while forty exist.
+    firing = [
+        {"id": f"f{i}", "rule_name": "CPU", "severity": "critical", "resolved_at": None}
+        for i in range(3)
+    ]
+    resolved = [
+        {
+            "id": f"r{i}",
+            "rule_name": "Memory",
+            "severity": "warning",
+            "resolved_at": 1704067200000,
+        }
+        for i in range(40)
+    ]
+
+    def alerts(request: httpx.Request) -> httpx.Response:
+        limit = int(request.url.params.get("limit", "50"))
+        page = (firing + resolved)[:limit]
+        return httpx.Response(
+            200,
+            json=enveloped({"alerts": page, "total": 43, "firing": 3, "resolved": 40}),
+        )
+
+    project(fake).handle("GET", "/api/project/p1/alerts", alerts)
+    async with make_client(fake, settings) as client:
+        result = await call(client, "list_alerts", state_filter="resolved", limit=3)
+    assert result["returned"] == 3
+    assert result["matched"] == 40
+    assert all(not a["firing"] for a in result["alerts"])
+    assert result["project_totals"]["resolved"] == 40
+    # The wider scan is what makes the filter meaningful.
+    assert int(dict(fake.last.url.params)["limit"]) > 3
+
+
+async def test_alert_app_filter_uses_server_side_search(
+    fake: FakeCoroot, settings: Settings
+) -> None:
+    project(fake).on(
+        "GET",
+        "/api/project/p1/alerts",
+        enveloped(
+            {
+                "alerts": [
+                    {
+                        "id": "a1",
+                        "application_id": "p1:ns:Deployment:api",
+                        "severity": "warning",
+                        "resolved_at": None,
+                    },
+                    {
+                        "id": "a2",
+                        "application_id": "p1:ns:Deployment:web",
+                        "severity": "warning",
+                        "resolved_at": None,
+                    },
+                ],
+                "total": 2,
+                "firing": 2,
+                "resolved": 0,
+            }
+        ),
+    )
+    async with make_client(fake, settings) as client:
+        result = await call(client, "list_alerts", app_id="p1:ns:Deployment:api")
+    # Coroot's search matches application_id, so the filter reaches the database.
+    assert dict(fake.last.url.params)["search"] == "p1:ns:Deployment:api"
+    # The exact match still runs here, because search is a substring match.
+    assert [a["id"] for a in result["alerts"]] == ["a1"]
+
+
+async def test_incident_filters_scan_beyond_the_requested_limit(
+    fake: FakeCoroot, settings: Settings
+) -> None:
+    open_incidents = [
+        {"key": f"o{i}", "application_id": "p1:ns:Deployment:api", "resolved_at": None}
+        for i in range(2)
+    ]
+    closed = [
+        {
+            "key": f"c{i}",
+            "application_id": "p1:ns:Deployment:web",
+            "resolved_at": 1704067200000,
+        }
+        for i in range(30)
+    ]
+
+    def incidents(request: httpx.Request) -> httpx.Response:
+        limit = int(request.url.params.get("limit", "100"))
+        return httpx.Response(200, json=enveloped((open_incidents + closed)[:limit]))
+
+    project(fake).handle("GET", "/api/project/p1/incidents", incidents)
+    async with make_client(fake, settings) as client:
+        result = await call(client, "list_incidents", state_filter="resolved", limit=5)
+        assert result["matched"] == 30
+        assert result["returned"] == 5
+
+        by_app = await call(
+            client, "list_incidents", app_id="p1:ns:Deployment:api", limit=5
+        )
+    assert by_app["matched"] == 2
