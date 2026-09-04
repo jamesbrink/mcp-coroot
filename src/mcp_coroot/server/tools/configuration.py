@@ -2,18 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import Field
 
-from ...client.applications import (
-    CHECK_IDS,
-    INSTRUMENTATION_DEFAULT_PORTS,
-    INSTRUMENTATION_TYPES,
-)
-from ...client.configuration import INTEGRATION_TYPES
+from ...client.applications import CHECK_IDS, INSTRUMENTATION_DEFAULT_PORTS
 from ...client.ids import PROJECT_SCOPE_APP_ID, normalize_app_id
 from ...config import Settings
 from ..app import DESTRUCTIVE, READ_ONLY, WRITE
@@ -32,14 +27,25 @@ CheckIdParam = Annotated[
     ),
 ]
 
+IntegrationType = Literal[
+    "prometheus",
+    "clickhouse",
+    "aws",
+    "slack",
+    "teams",
+    "pagerduty",
+    "opsgenie",
+    "webhook",
+]
+
 IntegrationTypeParam = Annotated[
-    str,
-    Field(
-        description=(
-            "Integration type: 'prometheus', 'clickhouse', 'aws', 'slack', "
-            "'teams', 'pagerduty', 'opsgenie' or 'webhook'."
-        )
-    ),
+    IntegrationType, Field(description="Which integration to act on.")
+]
+
+DatabaseType = Literal["postgres", "mysql", "redis", "mongodb", "memcached"]
+
+DatabaseTypeParam = Annotated[
+    DatabaseType, Field(description="Which database engine the application runs.")
 ]
 
 ScopeAppParam = Annotated[
@@ -165,7 +171,7 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
         them into the conversation. Set COROOT_REVEAL_SECRETS to read them.
         """
         state, pid = await target(ctx, project_id)
-        kind = one_of(integration_type, INTEGRATION_TYPES, name="integration_type")
+        kind = integration_type
         data = await state.coroot.integrations.get(pid, kind)
         payload = data if isinstance(data, dict) else {"value": data}
         safe = redact_secrets(payload, reveal=state.settings.reveal_secrets)
@@ -176,15 +182,7 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
     async def get_db_instrumentation(
         ctx: ToolContext,
         app_id: AppIdParam,
-        db_type: Annotated[
-            str,
-            Field(
-                description=(
-                    "Database type: 'postgres', 'mysql', 'redis', 'mongodb' or "
-                    "'memcached'."
-                )
-            ),
-        ],
+        db_type: DatabaseTypeParam,
         project_id: ProjectIdParam = None,
     ) -> dict[str, Any]:
         """Check how Coroot collects statistics from a database.
@@ -195,7 +193,7 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
         read them.
         """
         state, pid = await target(ctx, project_id)
-        kind = one_of(db_type, INSTRUMENTATION_TYPES, name="db_type")
+        kind = db_type
         data = await state.coroot.applications.get_instrumentation(pid, app_id, kind)
         safe = redact_secrets(data, reveal=state.settings.reveal_secrets)
         return respond(
@@ -428,7 +426,7 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
         replace those placeholders with real values, never send one back.
         """
         state, pid = await target(ctx, project_id)
-        kind = one_of(integration_type, INTEGRATION_TYPES, name="integration_type")
+        kind = integration_type
         if masked := find_placeholders(config):
             raise ToolError(
                 f"config still holds a redaction placeholder at: {', '.join(masked)}. "
@@ -454,7 +452,7 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
         source. Replace it with configure_integration instead.
         """
         state, pid = await target(ctx, project_id)
-        kind = one_of(integration_type, INTEGRATION_TYPES, name="integration_type")
+        kind = integration_type
         await state.coroot.integrations.delete(pid, kind)
         return ok(f"Deleted {kind} integration", project_id=pid, type=kind)
 
@@ -483,15 +481,7 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
     async def configure_db_instrumentation(
         ctx: ToolContext,
         app_id: AppIdParam,
-        db_type: Annotated[
-            str,
-            Field(
-                description=(
-                    "Database type: 'postgres', 'mysql', 'redis', 'mongodb' or "
-                    "'memcached'."
-                )
-            ),
-        ],
+        db_type: DatabaseTypeParam,
         username: Annotated[
             str | None, Field(description="Username Coroot should connect with.")
         ] = None,
@@ -523,7 +513,7 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
         connection counts) that plain metrics cannot provide.
         """
         state, pid = await target(ctx, project_id)
-        kind = one_of(db_type, INSTRUMENTATION_TYPES, name="db_type")
+        kind = db_type
         if placeholders := find_placeholders(
             {"username": username, "password": password}
         ):
@@ -551,10 +541,8 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
         ctx: ToolContext,
         app_id: AppIdParam,
         kind: Annotated[
-            str,
-            Field(
-                description="Which telemetry to link: 'profiling', 'tracing' or 'logs'."
-            ),
+            Literal["profiling", "tracing", "logs"],
+            Field(description="Which telemetry stream to link."),
         ],
         service: Annotated[
             str,
@@ -573,15 +561,14 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
         did not match automatically.
         """
         state, pid = await target(ctx, project_id)
-        which = one_of(kind, ("profiling", "tracing", "logs"), name="kind")
         setter = {
             "profiling": state.coroot.applications.set_profiling_service,
             "tracing": state.coroot.applications.set_tracing_service,
             "logs": state.coroot.applications.set_logs_service,
-        }[which]
+        }[kind]
         await setter(pid, app_id, service)
         return ok(
-            f"Linked {which} service {service!r}",
+            f"Linked {kind} service {service!r}",
             project_id=pid,
             application_id=normalize_app_id(app_id, project_id=pid),
         )
