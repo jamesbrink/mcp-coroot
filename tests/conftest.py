@@ -38,6 +38,7 @@ class FakeCoroot:
     session_cookie: str = "session-token"
     username: str = "admin"
     password: str = "secret"
+    api_key: str = "test-api-key"
     require_auth: bool = True
 
     def on(
@@ -70,6 +71,10 @@ class FakeCoroot:
         self.requests.append(request)
         path = raw_path(request)
         if request.method == "POST" and path == "/api/login":
+            # A test can script its own login (a proxy stripping the cookie, a
+            # 500, a cookie the server then refuses).
+            if custom := self.routes.get(("POST", "/api/login")):
+                return custom(request)
             payload = json.loads(request.content or b"{}")
             if (
                 payload.get("email") == self.username
@@ -84,21 +89,16 @@ class FakeCoroot:
                 )
             return httpx.Response(404, text="Invalid email or password.\n")
         if path == "/health":
-            return httpx.Response(200)
-        if (
-            self.require_auth
-            and path.startswith("/api/")
-            and request.headers.get("X-API-Key") is None
-            and request.headers.get("cookie", "").find(
-                f"{SESSION_COOKIE_NAME}={self.session_cookie}"
+            return self.routes.get(("GET", "/health"), lambda _: httpx.Response(200))(
+                request
             )
-            < 0
-        ):
-            return httpx.Response(401, text="")
-        handler = self.routes.get((request.method, path)) or self.routes.get(
-            (request.method, request.url.path)
-        )
+        if self.require_auth and (denied := self._check_auth(request, path)):
+            return denied
+        handler = self.routes.get((request.method, path))
         if handler is None:
+            if any(route == path for _, route in self.routes):
+                # gorilla answers a known path with an unknown method as 405.
+                return httpx.Response(405, text="")
             # Coroot's SPA catch-all: unknown /api paths return HTML with 200.
             return httpx.Response(
                 200,
@@ -106,6 +106,28 @@ class FakeCoroot:
                 headers={"content-type": "text/html"},
             )
         return handler(request)
+
+    def _check_auth(self, request: httpx.Request, path: str) -> httpx.Response | None:
+        """Reject a request the way Coroot's two auth middlewares would.
+
+        ``/api/v1/*`` and the ClickHouse routes take an API key and nothing
+        else; every other ``/api/`` route takes the session cookie and ignores
+        the key entirely.
+        """
+        key_route = path.startswith("/api/v1/") or path.startswith("/api/clickhouse")
+        if key_route:
+            key = request.headers.get("X-API-Key")
+            if key is None:
+                return httpx.Response(400, text="no api key")
+            if key != self.api_key:
+                return httpx.Response(404, text="no project found")
+            return None
+        if not path.startswith("/api/"):
+            return None
+        cookie = f"{SESSION_COOKIE_NAME}={self.session_cookie}"
+        if cookie not in request.headers.get("cookie", ""):
+            return httpx.Response(401, text="")
+        return None
 
     @property
     def last(self) -> httpx.Request:

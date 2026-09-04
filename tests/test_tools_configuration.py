@@ -1566,3 +1566,134 @@ def test_toolsets_are_parsed_and_validated() -> None:
     ).toolsets == frozenset({"diagnose", "admin"})
     with pytest.raises(ConfigError, match="unknown group"):
         Settings.from_env({"COROOT_TOOLSETS": "diagnose,telepathy"})
+
+
+async def test_list_alerts_requests_resolved_only_when_asked(
+    fake: FakeCoroot, settings: Settings
+) -> None:
+    # Asserted through the tool, because the tool is what chooses the flag.
+    seen: list[str] = []
+
+    def alerts(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.params.get("include_resolved", ""))
+        return httpx.Response(
+            200,
+            json=enveloped({"alerts": [], "total": 0, "firing": 0, "resolved": 0}),
+        )
+
+    project(fake).handle("GET", "/api/project/p1/alerts", alerts)
+    async with make_client(fake, settings) as client:
+        await call(client, "list_alerts", state_filter="firing")
+        await call(client, "list_alerts", state_filter="resolved")
+        await call(client, "list_alerts", state_filter="any")
+    assert seen == ["false", "true", "true"]
+
+
+async def test_list_applications_filters_by_category(
+    fake: FakeCoroot, settings: Settings
+) -> None:
+    project(fake).on(
+        "GET",
+        "/api/project/p1/overview/applications",
+        enveloped(
+            {
+                "applications": [
+                    {
+                        "id": "p1:ns:Deployment:api",
+                        "status": "ok",
+                        "category": "application",
+                    },
+                    {
+                        "id": "p1:ns:StatefulSet:db",
+                        "status": "ok",
+                        "category": "database",
+                    },
+                ]
+            }
+        ),
+    )
+    async with make_client(fake, settings) as client:
+        result = await call(client, "list_applications", category="database")
+    assert [a["id"] for a in result["applications"]] == ["p1:ns:StatefulSet:db"]
+    assert result["total_in_project"] == 2
+    assert result["matched"] == 1
+
+
+async def test_trace_tools_filter_by_span(fake: FakeCoroot, settings: Settings) -> None:
+    project(fake).on(
+        "GET",
+        "/api/project/p1/overview/traces",
+        enveloped({"traces": {"summary": {"stats": []}}}),
+    )
+    async with make_client(fake, settings) as client:
+        await call(
+            client, "summarize_trace_endpoints", service="checkout", span="GET /cart"
+        )
+    filters = json.loads(dict(fake.last.url.params)["query"])["filters"]
+    assert {"field": "SpanName", "op": "=", "value": "GET /cart"} in filters
+
+
+async def test_get_profile_accepts_a_concrete_type(
+    fake: FakeCoroot, settings: Settings
+) -> None:
+    # A concrete ProfileType must go straight through, without the extra probe
+    # request a bare category needs.
+    project(fake).on(
+        "GET",
+        "/api/project/p1/app/p1%3Ans%3ADeployment%3Aapi/profiling",
+        enveloped(
+            {
+                "status": "ok",
+                "profile": {
+                    "type": "go:heap_inuse_space:bytes",
+                    "flamegraph": {"name": "root", "total": 10},
+                },
+            }
+        ),
+    )
+    async with make_client(fake, settings) as client:
+        result = await call(
+            client,
+            "get_profile",
+            app_id="ns:Deployment:api",
+            profile="go:heap_inuse_space:bytes",
+            instance="pod-1",
+        )
+    assert result["profile_type"] == "go:heap_inuse_space:bytes"
+    assert (
+        len(
+            fake.calls(
+                "GET", "/api/project/p1/app/p1%3Ans%3ADeployment%3Aapi/profiling"
+            )
+        )
+        == 1
+    )
+    assert json.loads(dict(fake.last.url.params)["query"]) == {
+        "type": "go:heap_inuse_space:bytes",
+        "instance": "pod-1",
+    }
+
+
+async def test_read_only_mode_hides_every_write_tool(fake: FakeCoroot) -> None:
+    # Asserted as an invariant, not a sample: any tool left registered in
+    # read-only mode must be annotated read-only.
+    everything = Settings(
+        base_url="http://coroot.test", username="a", password="b", toolsets=ALL_TOOLSETS
+    )
+    locked = Settings(
+        base_url="http://coroot.test",
+        username="a",
+        password="b",
+        toolsets=ALL_TOOLSETS,
+        read_only=True,
+    )
+    async with make_client(fake, everything) as client:
+        full = {t.name: t for t in (await client.list_tools()).tools}
+    async with make_client(fake, locked) as client:
+        remaining = list((await client.list_tools()).tools)
+
+    assert all(t.annotations.read_only_hint is True for t in remaining)
+    hidden = set(full) - {t.name for t in remaining}
+    writes = {n for n, t in full.items() if not t.annotations.read_only_hint}
+    assert hidden == writes, "read-only mode must hide exactly the write tools"
+    assert len(writes) > 25

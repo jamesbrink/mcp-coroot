@@ -607,14 +607,14 @@ async def test_metrics_query_uses_panel_data(
 
 async def test_query_range_uses_api_key(fake: FakeCoroot) -> None:
     fake.on("GET", "/api/v1/query_range", {"status": "success", "data": {"result": []}})
-    settings = Settings(base_url="http://coroot.test", api_key="key1")
+    settings = Settings(base_url="http://coroot.test", api_key=fake.api_key)
     client = CorootClient(settings, transport=httpx.MockTransport(fake))
     try:
         result = await client.metrics.query_range("up", from_="1h", step="60s")
     finally:
         await client.aclose()
     assert result["status"] == "success"
-    assert fake.last.headers["X-API-Key"] == "key1"
+    assert fake.last.headers["X-API-Key"] == fake.api_key
     assert unquote(str(fake.last.url.params["query"])) == "up"
 
 

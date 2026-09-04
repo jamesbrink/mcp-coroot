@@ -13,13 +13,15 @@ import sys
 
 from mcp import Client, StdioServerParameters
 
+#: Present in the default toolset, so the smoke test needs no configuration.
 EXPECTED_TOOLS = {
     "health_check",
     "list_projects",
     "list_applications",
     "get_application",
     "get_logs",
-    "get_traces",
+    "summarize_trace_endpoints",
+    "list_traces",
     "get_metrics",
     "list_incidents",
     "list_alerts",
