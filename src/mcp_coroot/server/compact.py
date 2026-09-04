@@ -163,6 +163,16 @@ def compact(value: Any, *, depth: int = 0, max_depth: int = 12) -> Any:
     return value
 
 
+def compact_dict(value: Any) -> dict[str, Any]:
+    """Compact a mapping, returning ``{}`` where :func:`compact` would return None.
+
+    ``compact`` drops keys whose value is None, so a mapping that compacts to
+    nothing becomes None. Callers that go on to index the result need a dict.
+    """
+    result = compact(value)
+    return result if isinstance(result, dict) else {}
+
+
 def encoded_size(payload: Any) -> int:
     """Size of ``payload`` once serialised as JSON."""
     return len(json.dumps(payload, default=str))

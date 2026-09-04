@@ -738,3 +738,67 @@ async def test_project_scoped_logs_use_the_application_endpoint(
     query = json.loads(dict(fake.last.url.params)["query"])
     assert {"name": "TraceId", "op": "=", "value": "t1"} in query["filters"]
     assert query["limit"] == 5
+
+
+async def test_empty_query_results_do_not_crash(
+    fake: FakeCoroot, settings: Settings
+) -> None:
+    # Coroot answers a PromQL query that matches nothing with a null chart.
+    project(fake).on("GET", "/api/project/p1/panel/data", {"chart": None})
+    async with make_client(fake, settings) as client:
+        metrics = await call(client, "get_metrics", query="nonexistent_metric")
+        assert metrics["series_count"] == 0
+        assert "list_metrics" in metrics["message"]
+
+        panel = await call(client, "get_panel_data", queries=["nonexistent_metric"])
+    # Empty values are dropped to save tokens; the message carries the meaning.
+    assert panel.get("chart") is None
+    assert "no series" in panel["message"]
+
+
+async def test_empty_overviews_do_not_crash(
+    fake: FakeCoroot, settings: Settings
+) -> None:
+    # An unknown project, or one with no data yet, yields a null data field.
+    project(fake)
+    for view in ("applications", "nodes", "deployments", "risks", "map", "costs"):
+        fake.on(
+            "GET",
+            f"/api/project/p1/overview/{view}",
+            {"context": CONTEXT, "data": None},
+        )
+    async with make_client(fake, settings) as client:
+        assert (await call(client, "list_applications"))["total"] == 0
+        assert (await call(client, "list_nodes"))["count"] == 0
+        assert (await call(client, "list_deployments"))["total"] == 0
+        assert (await call(client, "list_risks"))["count"] == 0
+        assert (await call(client, "get_service_map"))["count"] == 0
+        costs = await call(client, "get_costs")
+    assert costs["nodes"] == []
+
+
+async def test_empty_telemetry_responses_do_not_crash(
+    fake: FakeCoroot, settings: Settings
+) -> None:
+    project(fake)
+    fake.on(
+        "GET", "/api/project/p1/overview/traces", {"context": CONTEXT, "data": None}
+    )
+    fake.on("GET", "/api/project/p1/overview/logs", {"context": CONTEXT, "data": None})
+    fake.on(
+        "GET",
+        "/api/project/p1/app/p1%3Ans%3ADeployment%3Aapi/profiling",
+        enveloped(
+            {"status": "warning", "message": "Clickhouse integration is not configured"}
+        ),
+    )
+    async with make_client(fake, settings) as client:
+        traces = await call(client, "get_traces")
+        assert traces["endpoints"] == []
+
+        logs = await call(client, "get_logs")
+        assert logs["returned"] == 0
+
+        profile = await call(client, "get_profile", app_id="ns:Deployment:api")
+    assert profile.get("hotspots") is None
+    assert "Clickhouse" in profile["message"]
