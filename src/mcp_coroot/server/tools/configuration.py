@@ -280,7 +280,8 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
             Field(
                 description=(
                     "Glob patterns matching 'namespace/application-name', e.g. "
-                    "['staging/*', 'default/api-*']."
+                    "['staging/*', 'default/api-*']. Omit to keep the existing "
+                    "patterns."
                 )
             ),
         ] = None,
@@ -293,23 +294,27 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
             Field(
                 description=(
                     "Notification routing for incidents, deployments and alerts, "
-                    "in the shape list_application_categories returns."
+                    "in the shape list_application_categories returns. Omit to "
+                    "keep the existing routing."
                 )
             ),
         ] = None,
     ) -> dict[str, Any]:
-        """Create an application category, or update the patterns of an existing one.
+        """Create an application category, or update an existing one.
 
         Categories drive grouping and notification routing. Pass current_name to
-        edit or rename one.
+        edit or rename one; anything you leave out keeps its current value,
+        because Coroot replaces the whole category on save.
         """
         state, pid = await target(ctx, project_id)
-        form: dict[str, Any] = {
-            "action": "",
-            "id": current_name or "",
-            "name": name,
-            "custom_patterns": " ".join(custom_patterns or []),
-        }
+        # Coroot's save is a full replace: an omitted field is stored as empty.
+        # Start from the current form so partial updates do not wipe the rest.
+        form = await state.coroot.categories.get_form(pid, current_name or "")
+        form["action"] = ""
+        form["id"] = current_name or ""
+        form["name"] = name
+        if custom_patterns is not None:
+            form["custom_patterns"] = " ".join(custom_patterns)
         if notification_settings is not None:
             form["notification_settings"] = notification_settings
         await state.coroot.categories.save(pid, form)
