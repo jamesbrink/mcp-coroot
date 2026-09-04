@@ -115,14 +115,56 @@ async def test_bootstrap_hint(fake: FakeCoroot) -> None:
 
 async def test_api_key_header(fake: FakeCoroot) -> None:
     fake.on("GET", "/api/v1/series", {"status": "success", "data": []})
-    settings = Settings(base_url="http://coroot.test", api_key="k123")
+    settings = Settings(base_url="http://coroot.test", api_key=fake.api_key)
     transport = Transport(settings, transport=httpx.MockTransport(fake))
     try:
         data = await transport.get("/api/v1/series", use_api_key=True)
     finally:
         await transport.aclose()
     assert data["status"] == "success"
-    assert fake.last.headers["X-API-Key"] == "k123"
+    assert fake.last.headers["X-API-Key"] == fake.api_key
+
+
+async def test_wrong_api_key_is_rejected(fake: FakeCoroot) -> None:
+    # Coroot answers an unknown key with 404 "no project found"; sending an
+    # empty or wrong key must not look like success.
+    fake.on("GET", "/api/v1/series", {"status": "success", "data": []})
+    settings = Settings(base_url="http://coroot.test", api_key="not-the-key")
+    transport = Transport(settings, transport=httpx.MockTransport(fake))
+    try:
+        with pytest.raises(CorootNotFoundError, match="no project found"):
+            await transport.get("/api/v1/series", use_api_key=True)
+    finally:
+        await transport.aclose()
+
+
+async def test_session_cookie_is_not_accepted_on_api_key_routes(
+    fake: FakeCoroot, settings: Settings
+) -> None:
+    # Coroot's two middlewares are separate: a cookie does not authenticate
+    # /api/v1, and a key does not authenticate /api/project.
+    fake.on("GET", "/api/v1/series", {"status": "success"})
+    transport = Transport(settings, transport=httpx.MockTransport(fake))
+    try:
+        with pytest.raises(CorootValidationError, match="no api key"):
+            await transport.get("/api/v1/series")
+    finally:
+        await transport.aclose()
+
+
+async def test_wrong_method_on_a_known_path_is_reported_as_unsupported(
+    fake: FakeCoroot, settings: Settings
+) -> None:
+    # gorilla answers a registered path with an unregistered method as 405,
+    # which is a different failure from an unknown path.
+    fake.on("GET", "/api/project/p1/alerts", {"alerts": []})
+    transport = Transport(settings, transport=httpx.MockTransport(fake))
+    try:
+        with pytest.raises(CorootUnsupportedError) as excinfo:
+            await transport.post("/api/project/p1/alerts")
+    finally:
+        await transport.aclose()
+    assert excinfo.value.status_code == 405
 
 
 async def test_api_key_missing(fake: FakeCoroot) -> None:
