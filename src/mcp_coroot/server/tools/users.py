@@ -20,7 +20,7 @@ EmailParam = Annotated[
 NameParam = Annotated[str, Field(description="The user's display name.")]
 RoleParam = Annotated[
     str,
-    Field(description="Role name from list_roles, e.g. 'Admin', 'Editor', 'Viewer'."),
+    Field(description=("Role name from get_users, e.g. 'Admin', 'Editor', 'Viewer'.")),
 ]
 
 

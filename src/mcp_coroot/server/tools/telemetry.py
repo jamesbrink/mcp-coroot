@@ -262,9 +262,9 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
         """Summarise distributed traces per endpoint: rate, errors and latency.
 
         The first stop for "what is slow or failing?", ranked worst-first.
-        Latency quantiles are in SECONDS. Follow up with get_trace_errors for
-        failure reasons or get_trace_latency for the slow tail. Requires
-        ClickHouse in Coroot.
+        Latency quantiles are in SECONDS. Follow up with
+        list_trace_error_reasons for failure reasons or explain_trace_latency
+        for the slow tail. Requires ClickHouse in Coroot.
         """
         state, pid = await target(ctx, project_id)
         result = await state.coroot.overview.traces(
@@ -427,8 +427,9 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
             str | None,
             Field(
                 description=(
-                    "Only traces at least this slow, e.g. '1s' or '500ms'. Sizes "
-                    "from get_traces are in seconds, so pass them with a unit."
+                    "Only traces at least this slow, e.g. '1s' or '500ms'. Latency "
+                    "from summarize_trace_endpoints is in seconds, so pass it "
+                    "with a unit."
                 )
             ),
         ] = None,
@@ -484,8 +485,9 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
                 "note": None
                 if kept
                 else (
-                    "No traces matched. Lower slower_than, widen the time range, "
-                    "or check get_traces for which endpoints have traffic."
+                    "No traces matched. Lower slower_than, widen the time range, or "
+                    "check summarize_trace_endpoints for which endpoints have "
+                    "traffic."
                 ),
             },
         )

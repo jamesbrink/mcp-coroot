@@ -114,7 +114,7 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
             str | None,
             Field(
                 description=(
-                    "Incident key from list_incidents. Sets the window to that "
+                    "Incident key from get_incidents. Sets the window to that "
                     "incident and overrides from_time/to_time."
                 )
             ),
@@ -423,7 +423,8 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
             str,
             Field(
                 description=(
-                    "Risk category from list_risks: 'Availability' or 'Security'."
+                    "Risk category from get_overview(view='risks'): 'Availability' "
+                    "or 'Security'."
                 )
             ),
         ],
@@ -431,7 +432,8 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
             str,
             Field(
                 description=(
-                    "Risk type from list_risks, e.g. 'single-instance-app', "
+                    "Risk type from get_overview(view='risks'), e.g. "
+                    "'single-instance-app', "
                     "'unreplicated-database', 'db-internet-exposure'."
                 )
             ),

@@ -294,7 +294,8 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
             Field(
                 description=(
                     "Notification routing for incidents, deployments and alerts, "
-                    "in the shape list_application_categories returns. Omit to "
+                    "in the shape get_project_config('categories') returns. Omit "
+                    "to "
                     "keep the existing routing."
                 )
             ),
@@ -426,7 +427,8 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
 
         Coroot validates and connects before saving, so an invalid endpoint or
         token is reported as an error. Read the current shape with
-        get_integration first, but note that its credentials come back redacted:
+        get_integrations first, but note that its credentials come back
+        redacted:
         replace those placeholders with real values, never send one back.
         """
         state, pid = await target(ctx, project_id)

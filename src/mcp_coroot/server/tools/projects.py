@@ -214,6 +214,6 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
                 description=description,
             )
         if not key:
-            raise ToolError("key is required when deleting")
+            raise ToolError("key is required when revoking")
         await state.coroot.projects.delete_api_key(pid, key)
         return ok("Revoked ingestion key", project_id=pid)

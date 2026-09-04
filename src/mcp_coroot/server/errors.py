@@ -34,8 +34,8 @@ R = TypeVar("R")
 
 _ADVICE: dict[type[CorootError], str] = {
     CorootNotFoundError: (
-        "Verify the id with list_projects, list_applications, list_nodes, "
-        "list_incidents or list_alerts"
+        "Verify the id with get_projects, list_applications, get_nodes, "
+        "get_incidents or get_alerts"
     ),
     CorootPermissionError: "This account's Coroot role does not allow the action",
     CorootConflictError: "Choose a different name, or update the existing object",
@@ -44,7 +44,7 @@ _ADVICE: dict[type[CorootError], str] = {
     ),
     CorootServerError: (
         "Coroot itself failed; check its logs and its ClickHouse/Prometheus "
-        "integrations with get_project_status"
+        "integrations with get_projects"
     ),
 }
 

@@ -43,7 +43,7 @@ class AppState:
         if not projects:
             raise ToolError(
                 "No Coroot projects are visible to this user. Create one with "
-                "create_project, or check the account's permissions."
+                "save_project, or check the account's permissions."
             )
         listing = ", ".join(f"{p.get('name')} ({p.get('id')})" for p in projects[:20])
         raise ToolError(

@@ -369,11 +369,14 @@ async def test_risks_filter_dismissed(
             ),
         )
         active = await call(client, "get_overview", view="risks")
-        assert active["count"] == 1
+        assert [r["application_id"] for r in active["risks"]] == [
+            "p1:default:Deployment:api"
+        ]
+        assert active["risks"][0]["dismissed"] is False
         everything = await call(
             client, "get_overview", view="risks", include_dismissed=True
         )
-        assert everything["count"] == 2
+        assert [r["dismissed"] for r in everything["risks"]] == [False, True]
 
     # -- telemetry ---------------------------------------------------------------
 
@@ -449,6 +452,9 @@ async def test_log_patterns_sorted_by_volume(
             client, "get_logs", app_id="default:Deployment:api", view="patterns"
         )
         assert [p["count"] for p in result["patterns"]] == [90, 5]
+
+        message = await call_error(client, "get_logs", view="patterns")
+        assert "app_id is required" in message
 
 
 async def test_traces_and_errors(one_project: FakeCoroot, settings: Settings) -> None:
