@@ -572,8 +572,8 @@ async def test_incidents_and_alerts(
             ),
         )
         everything = await call(client, "list_incidents")
-        assert everything["total"] == 2
-        assert everything["open"] == 1
+        assert everything["matched"] == 2
+        assert everything["open_in_scan"] == 1
         open_only = await call(client, "list_incidents", state_filter="open")
         assert [i["key"] for i in open_only["incidents"]] == ["inc1"]
         assert open_only["incidents"][0]["opened_at"] == "2024-01-01T00:00:00Z"
@@ -602,6 +602,7 @@ async def test_incidents_and_alerts(
         alerts = await call(client, "list_alerts")
         assert alerts["alerts"][0]["firing"] is True
         assert alerts["by_severity"] == {"critical": 1}
+        assert alerts["project_totals"] == {"firing": 1, "resolved": 0, "total": 1}
 
         one_project.on("POST", "/api/project/p1/alerts/resolve", status=204)
         resolved = await call(client, "resolve_alerts", alert_ids=["a1"])
