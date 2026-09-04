@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 from mcp.server.mcpserver import MCPServer
 from mcp.types import ToolAnnotations
 
-from .. import __version__
+from .._version import __version__
 from ..client import CorootClient
 from ..config import Settings
 from .instructions import INSTRUCTIONS
@@ -25,7 +25,7 @@ READ_ONLY = ToolAnnotations(
     open_world_hint=True,
 )
 
-#: Writes that create or replace an object, but do not remove data.
+#: Writes that update an existing object in place; repeating one is harmless.
 WRITE = ToolAnnotations(
     read_only_hint=False,
     destructive_hint=False,
@@ -33,7 +33,16 @@ WRITE = ToolAnnotations(
     open_world_hint=True,
 )
 
-#: Writes that delete data or notify people; clients should confirm these.
+#: Writes that mint a new object every call, so a retry creates a second one.
+CREATE = ToolAnnotations(
+    read_only_hint=False,
+    destructive_hint=False,
+    idempotent_hint=False,
+    open_world_hint=True,
+)
+
+#: Writes that delete data, overwrite it wholesale, or page a human. Clients
+#: should confirm these with the user before calling them.
 DESTRUCTIVE = ToolAnnotations(
     read_only_hint=False,
     destructive_hint=True,
