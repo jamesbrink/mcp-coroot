@@ -40,11 +40,11 @@ class InvalidTimeError(ValueError):
 
 
 def parse_duration_ms(value: str | int | float) -> int:
-    """Convert ``"5m"``, ``"1h30m"``, ``90`` (seconds) or ``1500.0`` (ms) to ms.
+    """Convert a duration to milliseconds.
 
-    Integers are interpreted as milliseconds when they look like one (>= 10 s
-    expressed in ms is ambiguous, so plain numbers are always taken as ms, matching
-    Coroot's JSON encoding of durations).
+    Accepts Go-style strings (``"5m"``, ``"1h30m"``, ``"500ms"``) and plain
+    numbers. A plain number is always milliseconds, matching Coroot's JSON
+    encoding of durations, so ``90`` is 90ms rather than 90 seconds.
     """
     if isinstance(value, bool):  # bool is an int subclass; reject explicitly
         raise InvalidTimeError("duration must be a string or number")

@@ -200,7 +200,7 @@ async def test_list_applications_summarises_health(
             ),
         )
         result = await call(client, "list_applications")
-        assert result["total"] == 2
+        assert result["total_in_project"] == 2
         assert result["by_status"] == {"critical": 1, "ok": 1}
         first = result["applications"][0]
         assert first["type"] == "golang"
@@ -808,6 +808,6 @@ async def test_large_responses_are_truncated(fake: FakeCoroot) -> None:
     )
     async with make_client(fake, settings) as client:
         result = await call(client, "list_applications")
-    assert result["total"] == 400
+    assert result["total_in_project"] == 400
     assert "truncated" in result
     assert len(json.dumps(result)) <= 3_000

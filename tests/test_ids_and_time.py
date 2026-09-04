@@ -128,3 +128,21 @@ def test_ms_to_iso() -> None:
     assert ms_to_iso(1704067200000) == "2024-01-01T00:00:00Z"
     assert ms_to_iso(None) is None
     assert ms_to_iso(0) is None
+
+
+def test_build_trace_param_resolves_relative_bounds() -> None:
+    # Coroot splits the timestamp range on its first '-', so a relative bound
+    # like 'now-10m' would be read as two separate timestamps.
+    from mcp_coroot.client.applications import build_trace_param
+
+    param = build_trace_param(source="otel", ts_from="now-10m", ts_to="now")
+    source, trace_id, timestamps, durations = param.split(":")
+    assert (source, trace_id, durations) == ("otel", "", "")
+    start, end = timestamps.split("-")
+    assert start.isdigit() and end.isdigit()
+    # Each bound resolves against its own clock reading, so allow a little slack.
+    assert 600_000 <= int(end) - int(start) < 601_000
+
+    assert build_trace_param(trace_id="abc") == ":abc::"
+    # Four colon-separated fields: source, trace id, timestamps, durations.
+    assert build_trace_param(dur_from=0.5) == ":::0.5-"

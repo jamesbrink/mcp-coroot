@@ -806,7 +806,7 @@ async def test_empty_overviews_do_not_crash(
             {"context": CONTEXT, "data": None},
         )
     async with make_client(fake, settings) as client:
-        assert (await call(client, "list_applications"))["total"] == 0
+        assert (await call(client, "list_applications"))["total_in_project"] == 0
         assert (await call(client, "list_nodes"))["count"] == 0
         assert (await call(client, "list_deployments"))["total"] == 0
         assert (await call(client, "list_risks"))["count"] == 0

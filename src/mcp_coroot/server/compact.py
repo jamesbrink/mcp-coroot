@@ -256,13 +256,24 @@ def fit(payload: dict[str, Any], max_chars: int) -> dict[str, Any]:
         )
         if encoded_size(shrunk) <= max_chars:
             return shrunk
+    # Nothing left to truncate: the payload is wide rather than deep. Report the
+    # shape instead of the data, and keep even that inside the budget.
+    note = (
+        f"Response could not be reduced below {max_chars} characters. "
+        "Query a narrower time range, a single application, or a smaller limit."
+    )
     keys = sorted(payload)
+    shown: list[str] = []
+    used = encoded_size({"truncated": note, "keys": [], "keys_omitted": len(keys)})
+    for key in keys:
+        used += len(key) + 4  # the key, its quotes and a separator
+        if used > max_chars:
+            break
+        shown.append(key)
     return {
-        "truncated": (
-            f"Response could not be reduced below {max_chars} characters. "
-            "Query a narrower time range, a single application, or a smaller limit."
-        ),
-        "keys": keys,
+        "truncated": note,
+        "keys": shown,
+        "keys_omitted": len(keys) - len(shown),
     }
 
 

@@ -258,7 +258,11 @@ async def test_application_logs_and_traces(
         source="otel", ts_from="now-10m", ts_to="now", dur_from=0.5
     )
     await coroot.applications.tracing("p1", "p1:default:Deployment:api", trace=trace)
-    assert query_of(fake)["trace"] == "otel::now-10m-now:0.5-"
+    # Relative bounds resolve to epoch ms: Coroot splits the range on its first
+    # '-', so 'now-10m' would otherwise be read as two timestamps.
+    source, trace_id, timestamps, durations = query_of(fake)["trace"].split(":")
+    assert (source, trace_id, durations) == ("otel", "", "0.5-")
+    assert all(part.isdigit() for part in timestamps.split("-"))
 
     fake.on("GET", f"{base}/profiling", enveloped({"profile": {}}))
     await coroot.applications.profiling("p1", "p1:default:Deployment:api", query="cpu")
