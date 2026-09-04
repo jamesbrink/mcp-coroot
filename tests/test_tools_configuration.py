@@ -74,7 +74,7 @@ async def test_list_inspections(fake: FakeCoroot, settings: Settings) -> None:
         ),
     )
     async with make_client(fake, settings) as client:
-        result = await call(client, "list_inspections")
+        result = await call(client, "get_inspections")
     assert result["count"] == 1
     assert result["checks"][0]["project_threshold"] == 90
 
@@ -138,7 +138,7 @@ async def test_application_category_crud(fake: FakeCoroot, settings: Settings) -
     )
     fake.on("POST", "/api/project/p1/application_categories")
     async with make_client(fake, settings) as client:
-        listed = await call(client, "list_application_categories")
+        listed = await call(client, "get_project_config", section="categories")
         assert listed["count"] == 1
 
         await call(
@@ -176,7 +176,9 @@ async def test_application_category_crud(fake: FakeCoroot, settings: Settings) -
         assert body["custom_patterns"] == "default/pay-*"
         assert body["notification_settings"] == {"incidents": {"enabled": False}}
 
-        await call(client, "delete_application_category", name="datastores")
+        await call(
+            client, "delete_project_config", section="category", name="datastores"
+        )
     assert fake.body(fake.last)["action"] == "delete"
 
 
@@ -188,7 +190,7 @@ async def test_custom_application_crud(fake: FakeCoroot, settings: Settings) -> 
     )
     fake.on("POST", "/api/project/p1/custom_applications")
     async with make_client(fake, settings) as client:
-        listed = await call(client, "list_custom_applications")
+        listed = await call(client, "get_project_config", section="custom_applications")
         assert listed["custom_applications"][0]["name"] == "workers"
 
         await call(
@@ -199,7 +201,12 @@ async def test_custom_application_crud(fake: FakeCoroot, settings: Settings) -> 
         )
         assert fake.body(fake.last)["instance_patterns"] == "worker-* batch-*"
 
-        await call(client, "delete_custom_application", name="workers")
+        await call(
+            client,
+            "delete_project_config",
+            section="custom_application",
+            name="workers",
+        )
     assert fake.body(fake.last)["instance_patterns"] == ""
 
 
@@ -223,21 +230,23 @@ async def test_integration_read_and_delete(
     fake.on("DELETE", "/api/project/p1/integrations/pagerduty")
     fake.on("PUT", "/api/project/p1/integrations")
     async with make_client(fake, settings) as client:
-        listed = await call(client, "list_integrations")
+        listed = await call(client, "get_integrations")
         assert listed["base_url"] == "https://coroot.example"
 
-        single = await call(client, "get_integration", integration_type="pagerduty")
+        single = await call(client, "get_integrations", integration_type="pagerduty")
         # Coroot hands the real key to any account that may edit integrations;
         # it must not reach the model.
         assert single["integration_key"] == "<redacted by mcp-coroot>"
         assert "r8k2-live-secret" not in json.dumps(single)
         assert single["incidents"] is True
 
-        await call(client, "delete_integration", integration_type="pagerduty")
+        await call(
+            client, "delete_project_config", section="integration", name="pagerduty"
+        )
         assert fake.last.method == "DELETE"
 
         message = await call_error(
-            client, "get_integration", integration_type="carrier-pigeon"
+            client, "get_integrations", integration_type="carrier-pigeon"
         )
     # Rejected by the schema enum before the tool body runs.
     assert "integration_type" in message
@@ -306,7 +315,7 @@ async def test_cloud_pricing(fake: FakeCoroot, settings: Settings) -> None:
     fake.on("POST", "/api/project/p1/custom_cloud_pricing")
     fake.on("DELETE", "/api/project/p1/custom_cloud_pricing")
     async with make_client(fake, settings) as client:
-        current = await call(client, "get_cloud_pricing")
+        current = await call(client, "get_project_config", section="pricing")
         assert current["default"] is True
 
         await call(client, "set_cloud_pricing", per_cpu_core=0.05, per_memory_gb=0.006)
@@ -336,7 +345,7 @@ async def test_get_server_settings(fake: FakeCoroot, settings: Settings) -> None
     fake.on("GET", "/api/ai", {"provider": ""})
     fake.on("GET", "/api/cloud", {"status": "unconfigured"})
     async with make_client(fake, settings) as client:
-        result = await call(client, "get_server_settings")
+        result = await call(client, "get_project_config", section="instance")
     assert result["sso"]["default_role"] == "Viewer"
     assert result["cloud"]["status"] == "unconfigured"
     assert result["base_url"] == "http://coroot.test"
@@ -357,25 +366,23 @@ async def test_dashboard_crud(fake: FakeCoroot, settings: Settings) -> None:
         enveloped({"id": "d2", "name": "New", "config": {"groups": []}}),
     )
     async with make_client(fake, settings) as client:
-        listed = await call(client, "list_dashboards")
+        listed = await call(client, "get_dashboards")
         assert listed["count"] == 1
 
-        created = await call(client, "create_dashboard", name="New")
+        created = await call(client, "save_dashboard", name="New")
         assert created["dashboard_id"] == "d2"
 
-        fetched = await call(client, "get_dashboard", dashboard_id="d2")
+        fetched = await call(client, "get_dashboards", dashboard_id="d2")
         assert fetched["config"] == {"groups": []}
 
-        await call(client, "update_dashboard", dashboard_id="d2", name="Renamed")
+        await call(client, "save_dashboard", dashboard_id="d2", name="Renamed")
         assert fake.body(fake.last)["action"] == "update"
 
         await call(client, "delete_dashboard", dashboard_id="d2")
     assert fake.body(fake.last)["action"] == "delete"
 
 
-async def test_get_panel_data_builds_a_panel(
-    fake: FakeCoroot, settings: Settings
-) -> None:
+async def test_get_metrics_builds_a_panel(fake: FakeCoroot, settings: Settings) -> None:
     project(fake).on(
         "GET",
         "/api/project/p1/panel/data",
@@ -387,19 +394,12 @@ async def test_get_panel_data_builds_a_panel(
         },
     )
     async with make_client(fake, settings) as client:
-        result = await call(
-            client,
-            "get_panel_data",
-            queries=["up", "rate(x[5m])"],
-            legend="{{instance}}",
-        )
-    assert result["queries"] == ["up", "rate(x[5m])"]
-    assert result["chart"]["series"][0]["avg"] == 1.5
-    import json
-
+        result = await call(client, "get_metrics", query="up", legend="{{instance}}")
+    assert result["query"] == "up"
+    assert result["series"][0]["avg"] == 1.5
     panel = json.loads(dict(fake.last.url.params)["query"])
     queries = panel["source"]["metrics"]["queries"]
-    assert [q["query"] for q in queries] == ["up", "rate(x[5m])"]
+    assert [q["query"] for q in queries] == ["up"]
     assert queries[0]["legend"] == "{{instance}}"
 
 
@@ -423,19 +423,20 @@ async def test_user_tools(fake: FakeCoroot, settings: Settings) -> None:
     )
     fake.on("POST", "/api/user")
     async with make_client(fake, settings) as client:
-        users = await call(client, "list_users")
+        users = await call(client, "get_users")
         assert users["roles"] == ["Admin", "Viewer"]
+        assert users["users"][0]["email"] == "admin"
 
-        roles = await call(client, "list_roles")
-        assert roles["roles"][0]["name"] == "Admin"
+        roles = await call(client, "get_users", include_permissions=True)
+        assert roles["role_permissions"][0]["name"] == "Admin"
 
         await call(
-            client, "create_user", email="a@b.c", name="A", role="Viewer", password="pw"
+            client, "save_user", email="a@b.c", name="A", role="Viewer", password="pw"
         )
         assert fake.body(fake.last)["action"] == "create"
 
         await call(
-            client, "update_user", user_id=2, email="a@b.c", name="A2", role="Editor"
+            client, "save_user", user_id=2, email="a@b.c", name="A2", role="Editor"
         )
         assert fake.body(fake.last)["name"] == "A2"
 
@@ -459,15 +460,15 @@ async def test_alerting_rule_read_tools(fake: FakeCoroot, settings: Settings) ->
     )
     fake.on("PUT", "/api/project/p1/alerting-rules/r1", {"id": "r1", "enabled": False})
     async with make_client(fake, settings) as client:
-        rule = await call(client, "get_alerting_rule", rule_id="r1")
+        rule = await call(client, "get_alerting_rules", rule_id="r1")
         assert rule["name"] == "CPU"
 
-        exported = await call(client, "export_alerting_rules")
+        exported = await call(client, "get_alerting_rules", as_yaml=True)
         assert exported["yaml"].startswith("- id: r1")
 
         await call(
             client,
-            "update_alerting_rule",
+            "save_alerting_rule",
             rule_id="r1",
             rule={"name": "CPU", "enabled": False},
         )
@@ -494,12 +495,12 @@ async def test_alert_detail_and_state_changes(
     for action in ("suppress", "reopen"):
         fake.on("POST", f"/api/project/p1/alerts/{action}", status=204)
     async with make_client(fake, settings) as client:
-        alert = await call(client, "get_alert", alert_id="a1")
+        alert = await call(client, "get_alerts", alert_id="a1")
         assert alert["rule"] == "Memory"
         assert alert["details"][0]["value"] == "91%"
 
-        await call(client, "suppress_alerts", alert_ids=["a1"])
-        await call(client, "reopen_alerts", alert_ids=["a1"])
+        await call(client, "set_alert_state", action="suppress", alert_ids=["a1"])
+        await call(client, "set_alert_state", action="reopen", alert_ids=["a1"])
     assert fake.body(fake.last) == {"ids": ["a1"]}
 
 
@@ -519,14 +520,18 @@ async def test_api_key_tools(fake: FakeCoroot, settings: Settings) -> None:
 
     project(fake).handle("GET", "/api/project/p1/api_keys", get_keys)
     fake.handle("POST", "/api/project/p1/api_keys", post_keys)
+    fake.on("GET", "/api/project/p1", {"name": "prod"})
+    fake.on("GET", "/api/project/p1/status", enveloped({"status": "ok"}))
     async with make_client(fake, settings) as client:
-        listed = await call(client, "list_api_keys")
-        assert listed["keys"][0]["key"] == "k1"
+        listed = await call(client, "get_projects", project_id="p1")
+        assert listed["api_keys"]["keys"][0]["key"] == "k1"
 
-        created = await call(client, "create_api_key", description="ci")
+        created = await call(
+            client, "manage_api_key", action="create", description="ci"
+        )
         assert created["key"] == "k2"
 
-        await call(client, "delete_api_key", key="k2")
+        await call(client, "manage_api_key", action="delete", key="k2")
     assert [k["key"] for k in keys] == ["k1"]
 
 
@@ -536,13 +541,16 @@ async def test_get_project_and_update(fake: FakeCoroot, settings: Settings) -> N
         "/api/project/p1",
         {"name": "prod", "refresh_interval": 30000, "api_keys": []},
     )
+    fake.on("GET", "/api/project/p1/status", enveloped({"status": "ok"}))
+    fake.on("GET", "/api/project/p1/api_keys", {"keys": []})
     fake.on("POST", "/api/project/p1", text="p1\n")
     async with make_client(fake, settings) as client:
-        result = await call(client, "get_project")
+        result = await call(client, "get_projects", project_id="p1")
         assert result["name"] == "prod"
         assert result["id"] == "p1"
+        assert result["telemetry"]["status"] == "ok"
 
-        await call(client, "update_project", name="production")
+        await call(client, "save_project", name="production", project_id="p1")
     # The tool refreshes its project cache afterwards, so find the write itself.
     posted = fake.calls("POST", "/api/project/p1")[-1]
     assert fake.body(posted)["name"] == "production"
@@ -577,7 +585,7 @@ async def test_service_map_and_rca(fake: FakeCoroot, settings: Settings) -> None
         },
     )
     async with make_client(fake, settings) as client:
-        service_map = await call(client, "get_service_map")
+        service_map = await call(client, "get_overview", view="map")
         assert service_map["applications"][0]["upstreams"][0]["status"] == "critical"
 
         rca = await call(client, "get_application_rca", app_id="ns:Deployment:api")
@@ -603,7 +611,7 @@ async def test_costs_and_risk_dismissal(fake: FakeCoroot, settings: Settings) ->
     )
     fake.on("POST", "/api/project/p1/app/p1%3Ans%3ADeployment%3Aapi/risks")
     async with make_client(fake, settings) as client:
-        costs = await call(client, "get_costs")
+        costs = await call(client, "get_overview", view="costs")
         assert costs["nodes"][0]["name"] == "n1"
 
         await call(
@@ -672,7 +680,7 @@ async def test_node_lookup_and_log_severity_pass_through(
         ),
     )
     async with make_client(fake, settings) as client:
-        result = await call(client, "get_node", node="node-1")
+        result = await call(client, "get_nodes", node="node-1")
     assert result["checks"][0]["title"] == "CPU"
 
 
@@ -708,7 +716,7 @@ async def test_incident_detail_includes_rca(
         ),
     )
     async with make_client(fake, settings) as client:
-        result = await call(client, "get_incident", incident_key="inc1")
+        result = await call(client, "get_incidents", incident_key="inc1")
     assert result["open"] is True
     assert result["opened_at"] == "2024-01-01T00:00:00Z"
     assert result["availability_slo"]["violated"] is True
@@ -793,7 +801,7 @@ async def test_empty_query_results_do_not_crash(
         assert metrics["series_count"] == 0
         assert "list_metrics" in metrics["message"]
 
-        panel = await call(client, "get_panel_data", queries=["nonexistent_metric"])
+        panel = await call(client, "get_metrics", query="nonexistent_metric")
     # Empty values are dropped to save tokens; the message carries the meaning.
     assert panel.get("chart") is None
     assert "no series" in panel["message"]
@@ -812,11 +820,11 @@ async def test_empty_overviews_do_not_crash(
         )
     async with make_client(fake, settings) as client:
         assert (await call(client, "list_applications"))["total_in_project"] == 0
-        assert (await call(client, "list_nodes"))["count"] == 0
-        assert (await call(client, "list_deployments"))["total"] == 0
-        assert (await call(client, "list_risks"))["count"] == 0
-        assert (await call(client, "get_service_map"))["count"] == 0
-        costs = await call(client, "get_costs")
+        assert (await call(client, "get_nodes"))["count"] == 0
+        assert (await call(client, "get_overview", view="deployments"))["count"] == 0
+        assert (await call(client, "get_overview", view="risks"))["count"] == 0
+        assert (await call(client, "get_overview", view="map"))["count"] == 0
+        costs = await call(client, "get_overview", view="costs")
     assert costs["nodes"] == []
 
 
@@ -1047,7 +1055,7 @@ async def test_alert_filters_scan_beyond_the_requested_limit(
 
     project(fake).handle("GET", "/api/project/p1/alerts", alerts)
     async with make_client(fake, settings) as client:
-        result = await call(client, "list_alerts", state_filter="resolved", limit=3)
+        result = await call(client, "get_alerts", state_filter="resolved", limit=3)
     assert result["returned"] == 3
     assert result["matched"] == 40
     assert all(not a["firing"] for a in result["alerts"])
@@ -1091,7 +1099,7 @@ async def test_alert_app_filter_uses_server_side_search(
         ),
     )
     async with make_client(fake, settings) as client:
-        result = await call(client, "list_alerts", app_id="p1:ns:Deployment:api")
+        result = await call(client, "get_alerts", app_id="p1:ns:Deployment:api")
     # Coroot's search matches application_id, so the filter reaches the database.
     assert dict(fake.last.url.params)["search"] == "p1:ns:Deployment:api"
     # The exact match still runs here, because search is a substring match.
@@ -1120,12 +1128,12 @@ async def test_incident_filters_scan_beyond_the_requested_limit(
 
     project(fake).handle("GET", "/api/project/p1/incidents", incidents)
     async with make_client(fake, settings) as client:
-        result = await call(client, "list_incidents", state_filter="resolved", limit=5)
+        result = await call(client, "get_incidents", state_filter="resolved", limit=5)
         assert result["matched"] == 30
         assert result["returned"] == 5
 
         by_app = await call(
-            client, "list_incidents", app_id="p1:ns:Deployment:api", limit=5
+            client, "get_incidents", app_id="p1:ns:Deployment:api", limit=5
         )
     assert by_app["matched"] == 2
 
@@ -1148,11 +1156,15 @@ async def test_api_keys_tolerate_a_null_key_list(
 
     project(fake).handle("GET", "/api/project/p1/api_keys", get_keys)
     fake.handle("POST", "/api/project/p1/api_keys", post_keys)
+    fake.on("GET", "/api/project/p1", {"name": "prod"})
+    fake.on("GET", "/api/project/p1/status", enveloped({"status": "ok"}))
     async with make_client(fake, settings) as client:
-        listed = await call(client, "list_api_keys")
-        assert listed["keys"] == []
+        listed = await call(client, "get_projects", project_id="p1")
+        assert listed["api_keys"]["keys"] == []
 
-        created = await call(client, "create_api_key", description="first")
+        created = await call(
+            client, "manage_api_key", action="create", description="first"
+        )
     assert created["key"] == "k1"
 
 
@@ -1161,9 +1173,12 @@ async def test_health_check_does_not_need_credentials(fake: FakeCoroot) -> None:
     # problem from a credentials one must not fail at login.
     bad = Settings(base_url="http://coroot.test", username="admin", password="wrong")
     async with make_client(fake, bad) as client:
-        result = await call(client, "health_check")
+        result = await call(client, "get_connection")
     assert result["healthy"] is True
-    assert [r.url.path for r in fake.requests] == ["/health"]
+    # Reachability is probed anonymously; the identity lookup that follows is
+    # what needs credentials, and its failure is reported rather than raised.
+    assert fake.requests[0].url.path == "/health"
+    assert result["authenticated"] is False
 
 
 async def test_unexpected_errors_are_reported_not_swallowed(
@@ -1172,8 +1187,8 @@ async def test_unexpected_errors_are_reported_not_swallowed(
     # A bug in this server should still tell the model what happened.
     project(fake).on("GET", "/api/project/p1/overview/nodes", enveloped({"nodes": 42}))
     async with make_client(fake, settings) as client:
-        message = await call_error(client, "list_nodes")
-    assert "list_nodes failed unexpectedly" in message
+        message = await call_error(client, "get_nodes")
+    assert "get_nodes failed unexpectedly" in message
     assert "bug in mcp-coroot" in message
 
 
@@ -1221,7 +1236,7 @@ async def test_secrets_can_be_revealed_deliberately(fake: FakeCoroot) -> None:
         {"token": "xoxb-live", "default_channel": "ops"},
     )
     async with make_client(fake, reveal) as client:
-        result = await call(client, "get_integration", integration_type="slack")
+        result = await call(client, "get_integrations", integration_type="slack")
     assert result["token"] == "xoxb-live"
 
 
@@ -1307,8 +1322,8 @@ async def test_manually_resolved_and_suppressed_alerts_are_not_firing(
         ),
     )
     async with make_client(fake, settings) as client:
-        firing = await call(client, "list_alerts", state_filter="firing")
-        resolved = await call(client, "list_alerts", state_filter="resolved")
+        firing = await call(client, "get_alerts", state_filter="firing")
+        resolved = await call(client, "get_alerts", state_filter="resolved")
     assert [a["id"] for a in firing["alerts"]] == ["a1"]
     assert sorted(a["id"] for a in resolved["alerts"]) == ["a2", "a3"]
     assert resolved["alerts"][0]["resolved_by"] == "sre"
@@ -1340,7 +1355,7 @@ async def test_alert_app_filter_normalises_the_id(
     )
     async with make_client(fake, settings) as client:
         # A three-part id must still match the four-part id Coroot returns.
-        result = await call(client, "list_alerts", app_id="ns:Deployment:api")
+        result = await call(client, "get_alerts", app_id="ns:Deployment:api")
     assert [a["id"] for a in result["alerts"]] == ["a1"]
     assert dict(fake.last.url.params)["search"] == "p1:ns:Deployment:api"
     assert result["totals"]["scope"] == "search"
@@ -1386,7 +1401,7 @@ async def test_dashboard_config_round_trips_unchanged(
         enveloped({"id": "d1", "name": "Redis", "config": config}),
     )
     async with make_client(fake, settings) as client:
-        result = await call(client, "get_dashboard", dashboard_id="d1")
+        result = await call(client, "get_dashboards", dashboard_id="d1")
     assert result["config"] == config
 
 
@@ -1534,7 +1549,7 @@ async def test_toolsets_select_what_is_registered(fake: FakeCoroot) -> None:
     full = await names(toolsets=everything)
 
     # Finding a project works in every configuration.
-    assert {"list_projects", "get_project_status", "health_check"} <= default
+    assert {"get_projects", "get_connection"} <= default
     # The diagnostic core is what the default is for.
     assert {
         "list_applications",
@@ -1543,16 +1558,16 @@ async def test_toolsets_select_what_is_registered(fake: FakeCoroot) -> None:
         "summarize_trace_endpoints",
         "list_traces",
         "get_metrics",
-        "list_alerts",
-        "list_incidents",
+        "get_alerts",
+        "get_incidents",
     } <= default
     # Administration is not carried unless asked for.
-    assert not {"create_user", "delete_project", "create_api_key"} & default
-    assert {"create_user", "delete_project", "create_api_key"} <= full
-    assert "list_dashboards" not in default
-    assert "list_dashboards" in (await names(toolsets=frozenset({"dashboards"})))
-    assert "resolve_alerts" not in default
-    assert "resolve_alerts" in (await names(toolsets=frozenset({"alerts"})))
+    assert not {"save_user", "delete_project", "manage_api_key"} & default
+    assert {"save_user", "delete_project", "manage_api_key"} <= full
+    assert "get_dashboards" not in default
+    assert "get_dashboards" in (await names(toolsets=frozenset({"dashboards"})))
+    assert "set_alert_state" not in default
+    assert "set_alert_state" in (await names(toolsets=frozenset({"alerts"})))
     assert len(default) < len(full)
 
 
@@ -1583,9 +1598,9 @@ async def test_list_alerts_requests_resolved_only_when_asked(
 
     project(fake).handle("GET", "/api/project/p1/alerts", alerts)
     async with make_client(fake, settings) as client:
-        await call(client, "list_alerts", state_filter="firing")
-        await call(client, "list_alerts", state_filter="resolved")
-        await call(client, "list_alerts", state_filter="any")
+        await call(client, "get_alerts", state_filter="firing")
+        await call(client, "get_alerts", state_filter="resolved")
+        await call(client, "get_alerts", state_filter="any")
     assert seen == ["false", "true", "true"]
 
 
@@ -1696,4 +1711,4 @@ async def test_read_only_mode_hides_every_write_tool(fake: FakeCoroot) -> None:
     hidden = set(full) - {t.name for t in remaining}
     writes = {n for n, t in full.items() if not t.annotations.read_only_hint}
     assert hidden == writes, "read-only mode must hide exactly the write tools"
-    assert len(writes) > 25
+    assert len(writes) > 15

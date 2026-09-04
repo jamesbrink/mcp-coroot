@@ -74,10 +74,10 @@ async def test_tools_are_discoverable_and_annotated(
     async with make_client(one_project, settings) as client:
         tools = (await client.list_tools()).tools
         names = {t.name for t in tools}
-        assert {"list_projects", "get_application", "get_logs", "list_alerts"} <= names
-        assert len(tools) > 60
+        assert {"get_projects", "get_application", "get_logs", "get_alerts"} <= names
+        assert 40 <= len(tools) <= 50
         by_name = {t.name: t for t in tools}
-        assert by_name["list_projects"].annotations.read_only_hint is True
+        assert by_name["get_projects"].annotations.read_only_hint is True
         assert by_name["delete_project"].annotations.destructive_hint is True
         # Descriptions are what the model plans with; every tool must have one.
         assert all(t.description for t in tools)
@@ -92,8 +92,8 @@ async def test_read_only_mode_hides_mutating_tools(one_project: FakeCoroot) -> N
     assert "list_applications" in names
     for hidden in (
         "delete_project",
-        "create_user",
-        "resolve_alerts",
+        "save_user",
+        "set_alert_state",
         "set_cloud_pricing",
     ):
         assert hidden not in names
@@ -102,20 +102,20 @@ async def test_read_only_mode_hides_mutating_tools(one_project: FakeCoroot) -> N
 # -- projects ----------------------------------------------------------------
 
 
-async def test_health_check_and_whoami(
+async def test_connection_reports_reachability_and_identity(
     one_project: FakeCoroot, settings: Settings
 ) -> None:
     async with make_client(one_project, settings) as client:
-        health = await call(client, "health_check")
-        assert health["healthy"] is True
-        assert health["auth_mode"] == "password"
-        who = await call(client, "whoami")
-        assert who["email"] == "admin"
+        connection = await call(client, "get_connection")
+    assert connection["healthy"] is True
+    assert connection["auth_mode"] == "password"
+    assert connection["authenticated"] is True
+    assert connection["user"]["email"] == "admin"
 
 
 async def test_list_projects(one_project: FakeCoroot, settings: Settings) -> None:
     async with make_client(one_project, settings) as client:
-        result = await call(client, "list_projects")
+        result = await call(client, "get_projects")
         assert result["count"] == 1
         assert result["projects"][0]["id"] == "p1"
 
@@ -124,9 +124,12 @@ async def test_project_is_resolved_when_only_one_exists(
     one_project: FakeCoroot, settings: Settings
 ) -> None:
     async with make_client(one_project, settings) as client:
+        one_project.on("GET", "/api/project/p1", {"name": "prod"})
         one_project.on("GET", "/api/project/p1/status", enveloped({"status": "ok"}))
-        result = await call(client, "get_project_status")
-        assert result["project_id"] == "p1"
+        one_project.on("GET", "/api/project/p1/api_keys", {"keys": []})
+        result = await call(client, "get_projects", project_id="p1")
+        assert result["id"] == "p1"
+        assert result["telemetry"]["status"] == "ok"
         assert result["open_incidents"] == {"application": 1}
 
 
@@ -155,16 +158,18 @@ async def test_default_project_from_settings(fake: FakeCoroot) -> None:
         default_project="p9",
         toolsets=ALL_TOOLSETS,
     )
+    fake.on("GET", "/api/project/p9", {"name": "nine"})
     fake.on("GET", "/api/project/p9/status", enveloped({"status": "warning"}))
+    fake.on("GET", "/api/project/p9/api_keys", {"keys": []})
     async with make_client(fake, settings) as client:
-        result = await call(client, "get_project_status")
-    assert result["project_id"] == "p9"
+        result = await call(client, "get_projects", project_id="p9")
+    assert result["id"] == "p9"
 
 
 async def test_project_write_tools(one_project: FakeCoroot, settings: Settings) -> None:
     async with make_client(one_project, settings) as client:
         one_project.on("POST", "/api/project/", text="p2\n")
-        created = await call(client, "create_project", name="staging")
+        created = await call(client, "save_project", name="staging")
         assert created["project_id"] == "p2"
 
         one_project.on("DELETE", "/api/project/p2")
@@ -309,7 +314,7 @@ async def test_nodes_and_deployments(
                 }
             ),
         )
-        nodes = await call(client, "list_nodes")
+        nodes = await call(client, "get_nodes")
         assert nodes["nodes"][0]["cpu_percent"] == 42
         assert nodes["by_status"] == {"ok": 1}
 
@@ -329,7 +334,7 @@ async def test_nodes_and_deployments(
                 }
             ),
         )
-        deployments = await call(client, "list_deployments")
+        deployments = await call(client, "get_overview", view="deployments")
         assert deployments["deployments"][0]["version"] == "v2"
 
 
@@ -363,9 +368,11 @@ async def test_risks_filter_dismissed(
                 }
             ),
         )
-        active = await call(client, "list_risks")
+        active = await call(client, "get_overview", view="risks")
         assert active["count"] == 1
-        everything = await call(client, "list_risks", include_dismissed=True)
+        everything = await call(
+            client, "get_overview", view="risks", include_dismissed=True
+        )
         assert everything["count"] == 2
 
     # -- telemetry ---------------------------------------------------------------
@@ -438,7 +445,9 @@ async def test_log_patterns_sorted_by_volume(
                 }
             ),
         )
-        result = await call(client, "get_log_patterns", app_id="default:Deployment:api")
+        result = await call(
+            client, "get_logs", app_id="default:Deployment:api", view="patterns"
+        )
         assert [p["count"] for p in result["patterns"]] == [90, 5]
 
 
@@ -585,10 +594,10 @@ async def test_incidents_and_alerts(
                 ]
             ),
         )
-        everything = await call(client, "list_incidents")
+        everything = await call(client, "get_incidents")
         assert everything["matched"] == 2
         assert everything["open_in_scan"] == 1
-        open_only = await call(client, "list_incidents", state_filter="open")
+        open_only = await call(client, "get_incidents", state_filter="open")
         assert [i["key"] for i in open_only["incidents"]] == ["inc1"]
         assert open_only["incidents"][0]["opened_at"] == "2024-01-01T00:00:00Z"
 
@@ -613,7 +622,7 @@ async def test_incidents_and_alerts(
                 }
             ),
         )
-        alerts = await call(client, "list_alerts")
+        alerts = await call(client, "get_alerts")
         assert alerts["alerts"][0]["firing"] is True
         assert alerts["by_severity"] == {"critical": 1}
         assert alerts["totals"] == {
@@ -624,7 +633,9 @@ async def test_incidents_and_alerts(
         }
 
         one_project.on("POST", "/api/project/p1/alerts/resolve", status=204)
-        resolved = await call(client, "resolve_alerts", alert_ids=["a1"])
+        resolved = await call(
+            client, "set_alert_state", action="resolve", alert_ids=["a1"]
+        )
         assert resolved["ok"] is True
         assert one_project.body(one_project.last) == {"ids": ["a1"]}
 
@@ -635,7 +646,7 @@ async def test_state_filter_validation(
     # The value is a schema enum, so the SDK rejects it before the tool runs and
     # the message names the values that would have worked.
     async with make_client(one_project, settings) as client:
-        message = await call_error(client, "list_alerts", state_filter="exploding")
+        message = await call_error(client, "get_alerts", state_filter="exploding")
         assert "state_filter" in message
         assert "firing" in message and "resolved" in message
 
@@ -664,12 +675,12 @@ async def test_alerting_rule_lifecycle(
                 }
             ),
         )
-        rules = await call(client, "list_alerting_rules")
+        rules = await call(client, "get_alerting_rules")
         assert rules["rules"][0]["alerts"] == 3
 
         rule = {"name": "disk", "severity": "critical", "enabled": True}
         one_project.on("POST", "/api/project/p1/alerting-rules", {"id": "r2", **rule})
-        created = await call(client, "create_alerting_rule", rule=rule)
+        created = await call(client, "save_alerting_rule", rule=rule)
         assert created["rule_id"] == "r2"
 
         one_project.on("DELETE", "/api/project/p1/alerting-rules/r2", status=204)
@@ -687,13 +698,11 @@ async def test_inspection_config_scope(
             "/api/project/p1/app/%3A%3A/inspection/CPUContainer/config",
             {"form": {"configs": [{"threshold": 80}, None]}},
         )
-        result = await call(client, "get_inspection_config", check_id="CPUContainer")
+        result = await call(client, "get_inspections", check_id="CPUContainer")
         assert result["scope"] == "project"
         assert result["form"]["configs"][0]["threshold"] == 80
 
-        message = await call_error(
-            client, "get_inspection_config", check_id="NotACheck"
-        )
+        message = await call_error(client, "get_inspections", check_id="NotACheck")
         assert "check_id must be one of" in message
 
 
@@ -756,7 +765,7 @@ async def test_dashboard_panels_roundtrip(
         one_project.on("POST", "/api/project/p1/dashboards/d1")
         config = {"groups": [{"name": "Latency", "panels": []}]}
         result = await call(
-            client, "update_dashboard_panels", dashboard_id="d1", config=config
+            client, "save_dashboard", dashboard_id="d1", name="Redis", config=config
         )
         assert result["groups"] == 1
         body = one_project.body(one_project.last)
@@ -790,7 +799,7 @@ async def test_permission_errors_explain_themselves(
         one_project.on(
             "GET", "/api/users", status=403, text="You are not allowed to edit users."
         )
-        message = await call_error(client, "list_users")
+        message = await call_error(client, "get_users")
         assert "not allowed to edit users" in message
         assert "role" in message
 
