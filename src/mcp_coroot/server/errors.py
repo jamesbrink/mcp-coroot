@@ -10,7 +10,7 @@ from __future__ import annotations
 import functools
 import logging
 from collections.abc import Awaitable, Callable
-from typing import Any, ParamSpec, TypeVar
+from typing import ParamSpec, TypeVar
 
 from mcp.server.mcpserver.exceptions import ToolError
 
@@ -93,22 +93,9 @@ def guard(fn: Callable[P, Awaitable[R]]) -> Callable[P, Awaitable[R]]:
     return wrapper
 
 
-def require(condition: object, message: str) -> None:
-    """Raise a tool error when a precondition fails."""
-    if not condition:
-        raise ToolError(message)
-
-
 def one_of(value: str, allowed: tuple[str, ...], *, name: str) -> str:
     """Validate an enum-like argument, listing the valid values on failure."""
     candidate = value.strip()
     if candidate not in allowed:
         raise ToolError(f"{name} must be one of: {', '.join(allowed)} (got {value!r})")
     return candidate
-
-
-def as_dict(value: Any, *, name: str) -> dict[str, Any]:
-    """Coerce a tool argument to a JSON object, with a clear error if it is not."""
-    if isinstance(value, dict):
-        return value
-    raise ToolError(f"{name} must be a JSON object, got {type(value).__name__}")
