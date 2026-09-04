@@ -13,7 +13,7 @@ ProjectIdParam = Annotated[
     str | None,
     Field(
         description=(
-            "Coroot project (cluster) id from list_projects. Optional when the "
+            "Coroot project (cluster) id from get_projects. Optional when the "
             "server has a default project or the account can see only one."
         )
     ),
