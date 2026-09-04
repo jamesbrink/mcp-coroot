@@ -79,11 +79,12 @@ COROOT_BASE_URL=http://localhost:8080 uvx mcp-coroot --check
 | `COROOT_USERNAME` | Username for automatic login. Must be set with `COROOT_PASSWORD`. |
 | `COROOT_PASSWORD` | Password for automatic login. |
 | `COROOT_SESSION_COOKIE` | An existing `coroot_session` cookie, for SSO and MFA logins. |
-| `COROOT_API_KEY` | Project API key. Only the Prometheus-compatible query endpoints accept it. |
+| `COROOT_API_KEY` | Project API key. Coroot accepts it only on its Prometheus-compatible query endpoints, which no tool currently calls, so it cannot substitute for a login. |
 | `COROOT_PROJECT` | Default project id, so tool calls can omit `project_id`. |
 | `COROOT_TIMEOUT` | HTTP timeout in seconds. Defaults to 30. |
-| `COROOT_VERIFY_SSL` | Set to `false` to skip TLS verification. |
+| `COROOT_VERIFY_SSL` | Set to `false` to skip TLS verification. Only for a self-signed certificate on a trusted network: it exposes the password and session cookie to anyone on the path. |
 | `COROOT_READ_ONLY` | Set to `true` to expose only the tools that read from Coroot. |
+| `COROOT_REVEAL_SECRETS` | Set to `true` to let integration and database credentials reach the model. Off by default. |
 | `COROOT_MAX_OUTPUT_CHARS` | Character budget for one tool response. Defaults to 40000. |
 
 Username and password authentication is the best choice when it is available:
@@ -92,9 +93,30 @@ expires, which Coroot does after seven days.
 
 ### Read-only mode
 
-`COROOT_READ_ONLY=true` (or `--read-only`) removes the 33 mutating tools from
+`COROOT_READ_ONLY=true` (or `--read-only`) removes the 32 mutating tools from
 the server entirely. They do not appear in `tools/list`, so a model cannot call
 one by mistake. Worth setting for anyone pointing a client at production.
+
+It stops writes; it is not a confidentiality control. The reads it leaves in
+place still return a project's telemetry ingestion keys (`list_api_keys`), and
+`get_integration` and `get_db_instrumentation` still reach settings that hold
+credentials — those are redacted separately, see below.
+
+### Credentials in responses
+
+Coroot returns integration and database secrets in clear to any account allowed
+to edit them, which is the account this server usually runs as. Slack tokens,
+PagerDuty and Opsgenie keys, Teams webhook URLs, AWS access keys and database
+passwords are therefore redacted before they reach the model. Set
+`COROOT_REVEAL_SECRETS=true` if you genuinely need to read one back.
+
+### Untrusted content
+
+Tool results carry text from the monitored system: log lines, span attributes,
+application names, alert summaries. Anyone who can write a log line in that
+system can put words in front of the model. Treat that text as data, never as
+instructions — and prefer read-only mode when the monitored environment is not
+fully trusted.
 
 ### Transports
 
@@ -102,16 +124,23 @@ The default is stdio, which is what desktop clients launch. To run the server as
 a shared network service instead:
 
 ```bash
-mcp-coroot --transport http --host 0.0.0.0 --port 8000
+mcp-coroot --transport http --host 127.0.0.1 --port 8000
 ```
 
-That serves MCP Streamable HTTP at `/mcp`. Add `--stateless` and
-`--json-response` when running several replicas behind a load balancer. The
-server has no authentication of its own, so put it behind something that does.
+That serves MCP Streamable HTTP at `/mcp` (`--path` moves it). Add `--stateless`
+and `--json-response` when running several replicas behind a load balancer.
+
+This transport has no authentication of its own. Anyone who can reach the port
+gets every tool, including the destructive ones. Bind it to localhost, put an
+authenticating proxy in front, and combine it with `COROOT_READ_ONLY` unless
+writes are genuinely needed.
+
+Other flags: `--read-only`, `--log-level`, `--check` (print the resolved
+configuration and exit) and `--version`.
 
 ## What the model gets
 
-**77 tools.** Grouped below by what they touch. Every tool is annotated as
+**78 tools.** Grouped below by what they touch. Every tool is annotated as
 read-only, write or destructive, so clients can prompt for confirmation on the
 ones that change something.
 
@@ -173,11 +202,12 @@ rather than assume the data was complete.
 - `get_application_rca` - Coroot's AI root cause analysis, when Coroot Cloud is configured.
 - `set_risk_status` - Dismiss a risk as accepted, or restore it.
 
-#### Logs, traces, profiles and metrics (9)
+#### Logs, traces, profiles and metrics (10)
 
 - `get_logs` - Search log entries by severity and text, per application or project-wide.
 - `get_log_patterns` - Repeated messages grouped by pattern, with volumes.
-- `get_traces` - Per-endpoint request rate, error rate and latency quantiles.
+- `get_traces` - Per-endpoint request rate, error rate and latency quantiles, worst first.
+- `list_traces` - Individual slow or failed traces, with the ids to open them.
 - `get_trace_errors` - Top failure reasons with a sample trace id each.
 - `get_trace_latency` - Why the slow tail is slow, as a differential flame graph.
 - `get_trace` - One trace as a span tree with attributes and events.
@@ -244,8 +274,9 @@ Which applications are over-provisioned, and what should their requests be?
 
 Coroot 1.x, tested against the API as of Coroot 1.25. Python 3.11 or newer.
 Community Edition covers everything here except AI root cause analysis, which
-needs a Coroot Cloud key, and single sign-on configuration, which is an
-Enterprise feature and reads back empty.
+needs a Coroot Cloud key. Single sign-on cannot be configured through this
+server at all; `get_server_settings` reads the instance's role list and its AI
+provider, which is empty on Community Edition.
 
 Logs and traces need ClickHouse configured in Coroot; `get_project_status` says
 whether it is. Some management endpoints require an Admin or Editor role, and
@@ -272,11 +303,15 @@ suite needs no network and no running instance.
 
 Version 1.0 is a rewrite. Configuration is compatible, but tool names are not:
 
-- Overviews became verbs: `get_applications_overview` is now `list_applications`, `get_nodes_overview` is `list_nodes`, `get_deployments_overview` is `list_deployments`, `get_risks_overview` is `list_risks`.
-- Telemetry tools were split by intent: `get_application_traces` became `get_traces`, `get_trace_errors`, `get_trace_latency` and `get_trace`; `get_application_logs` became `get_logs` and `get_log_patterns`; `get_application_profiling` became `get_profile`.
+- Settings no longer come from a `.env` file. 0.1.x loaded one automatically; 1.0 reads the process environment only, so export the variables or pass them in your MCP client's `env` block.
+- Overviews became verbs: `get_applications_overview` is now `list_applications`, `get_nodes_overview` is `list_nodes`, `get_deployments_overview` is `list_deployments`, `get_risks_overview` is `list_risks`, `get_traces_overview` is `get_traces`.
+- Telemetry tools were split by intent: `get_application_traces` became `get_traces`, `list_traces`, `get_trace_errors`, `get_trace_latency` and `get_trace`; `get_application_logs` became `get_logs` and `get_log_patterns`; `get_application_profiling` became `get_profile`.
+- Renamed: `get_current_user` is `whoami`, `get_roles` is `list_roles`, `get_application_categories` is `list_application_categories`, `get_custom_applications` is `list_custom_applications`, `update_project_settings` is `update_project`, `update_db_instrumentation` is `configure_db_instrumentation`, `update_application_risks` is `set_risk_status`, `get_custom_cloud_pricing` is `get_cloud_pricing`, `update_custom_cloud_pricing` is `set_cloud_pricing`, `delete_custom_cloud_pricing` is `reset_cloud_pricing`.
+- Merged: `create_application_category` and `update_application_category` are `save_application_category`; `update_custom_applications` is `save_custom_application` and `delete_custom_application`; `update_current_user` is `update_user` and `change_password`; `get_sso_config` and `get_ai_config` are `get_server_settings`; `test_integration` is `configure_integration(test_only=true)`.
+- Removed with no replacement: `update_sso_config` and `update_ai_config`. Those settings are readable through `get_server_settings` but no longer writable.
 - Failures are reported as MCP tool errors instead of `{"success": false}` payloads.
 - Numeric and list arguments are real numbers and lists. The 0.1.x string workarounds (`sample_rate` as `"0.1"`, `excluded_paths` as a JSON string) are gone.
-- New areas: incidents, alerts, alerting rules, the service map, costs, PromQL queries, and Coroot Cloud settings.
+- New areas: incidents, alerts, alerting rules, the service map, costs, PromQL queries and Coroot Cloud status.
 
 ## License
 

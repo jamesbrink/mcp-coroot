@@ -20,6 +20,9 @@ specification. Configuration is unchanged; tool names are not.
 - Trace tools split by intent: `get_traces`, `get_trace_errors`,
   `get_trace_latency` and `get_trace`.
 - `get_log_patterns`, which groups repeated messages without needing ClickHouse.
+- `list_traces`, which finds individual slow or failed traces. Without it the
+  path from "this endpoint's p99 is bad" to "show me one of those requests"
+  had no first step.
 - Four prompts (`investigate_application`, `triage_project`, `review_incident`,
   `review_costs`) and resources for projects, per-project applications and a
   reference of id formats and check ids.
@@ -48,8 +51,27 @@ specification. Configuration is unchanged; tool names are not.
   path segments are encoded the way Coroot's router expects.
 - Docker image rebuilt as a multi-stage `uv` build running as a non-root user.
 
+### Security
+
+- Integration and database credentials are redacted before they reach the
+  model. Coroot returns them in clear to any account allowed to edit them,
+  which is the account this server normally runs as, so `get_integration` was
+  exposing Slack tokens, PagerDuty and Opsgenie keys, Teams webhook URLs and
+  AWS access keys, and `get_db_instrumentation` was exposing database
+  passwords. Set `COROOT_REVEAL_SECRETS` to opt out of the redaction.
+- Both write paths refuse a redaction placeholder rather than storing it
+  verbatim and breaking the integration.
+- Credentials embedded in `COROOT_BASE_URL` are rejected: they bypassed the
+  settings redaction and reached logs, `--check` output and tool responses.
+- The README documents the prompt-injection surface, since tool results carry
+  text written by whoever can write to the monitored system.
+
 ### Removed
 
+- Automatic loading of a `.env` file. Settings come from the process
+  environment only, so export them or pass them in your client's `env` block.
+- `update_sso_config` and `update_ai_config`. Those settings are readable
+  through `get_server_settings` but no longer writable.
 - The FastMCP string-coercion workarounds. `sample_rate` and `excluded_paths`
   take a number and a list; they no longer need to be strings.
 - `configure_profiling`, `configure_tracing` and `configure_logs`, replaced by
