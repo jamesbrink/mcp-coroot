@@ -1,0 +1,40 @@
+"""Server instructions sent to MCP clients during discovery."""
+
+INSTRUCTIONS = """\
+Coroot is an observability platform for running systems: metrics, logs, traces,
+profiles, service dependencies, SLO incidents and alerts. Use these tools when the
+question is about how a deployed system is behaving right now (or behaved at some
+past moment), not about source code.
+
+Start by finding the project (Coroot's word for a cluster): list_projects, then
+pass its id as project_id. If COROOT_PROJECT is configured, or the account can see
+only one project, project_id can be omitted.
+
+Application ids are 4-part strings, `cluster_id:namespace:Kind:name`, for example
+`hwvop6p7:default:Deployment:checkout`. Pass them back exactly as returned.
+
+Pick the cheapest tool that answers the question:
+
+- What is broken right now? list_alerts (firing alerts), list_incidents (SLO
+  incidents), list_applications (per-application health).
+- Why is one application unhealthy? get_application returns its audit reports,
+  failing checks and dependencies. get_application_rca asks Coroot for an AI root
+  cause analysis when Coroot Cloud is configured.
+- Where is time going? get_traces for per-endpoint rates, error rates and latency
+  quantiles; get_trace_errors for failure reasons with sample trace ids; get_trace
+  for one full span tree; get_profile for CPU, memory or lock flame graphs.
+- What do the logs say? get_logs (one application or the whole project) with
+  severity filters and full-text search; get_log_patterns groups repeated messages.
+- How are the hosts? list_nodes, then get_node for one host's audit report.
+- What changed? list_deployments shows rollouts and their impact.
+- Raw numbers? get_metrics runs PromQL; list_metrics discovers metric names.
+
+Time arguments accept `now-1h` style expressions, bare durations like `30m`, epoch
+timestamps, or ISO-8601 dates. Windows default to the last hour, so widen them
+explicitly when looking at history.
+
+Responses are summarised to stay within a context budget: chart series are reduced
+to last/min/max/avg and long lists are cut, with a `truncated` note when that
+happens. When you see that note, narrow the time range or lower the limit rather
+than assuming the data was complete.
+"""
