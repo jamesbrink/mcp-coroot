@@ -80,8 +80,12 @@ class SystemAPI(BaseAPI):
     """Instance-wide endpoints: health, SSO, AI and Coroot Cloud settings."""
 
     async def health(self) -> bool:
-        """``GET /health`` — reachable without authentication."""
-        response = await self._t.request("GET", "/health")
+        """``GET /health`` — probed without authenticating.
+
+        Coroot serves this route without auth, so the probe must not log in
+        first: otherwise bad credentials look like an unreachable instance.
+        """
+        response = await self._t.request("GET", "/health", anonymous=True)
         return response.status_code == 200
 
     async def sso(self) -> JsonValue:

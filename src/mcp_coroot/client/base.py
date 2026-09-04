@@ -213,10 +213,17 @@ class Transport:
         json_body: JsonValue = None,
         headers: Mapping[str, str] | None = None,
         use_api_key: bool = False,
+        anonymous: bool = False,
     ) -> httpx.Response:
-        """Send a request and return the raw response (raises on HTTP errors)."""
+        """Send a request and return the raw response (raises on HTTP errors).
+
+        ``anonymous`` skips authentication entirely, for endpoints that need
+        none: it lets a health probe succeed even when the credentials are wrong.
+        """
         request_headers = dict(headers or {})
-        if use_api_key:
+        if anonymous:
+            pass
+        elif use_api_key:
             if not self._settings.api_key:
                 raise CorootAuthenticationError(
                     "COROOT_API_KEY is required for this endpoint",
