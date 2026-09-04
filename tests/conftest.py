@@ -15,6 +15,16 @@ from mcp_coroot.config import SESSION_COOKIE_NAME, Settings
 Handler = Callable[[httpx.Request], httpx.Response]
 
 
+def raw_path(request: httpx.Request) -> str:
+    """The request path as sent on the wire (percent-encoding preserved).
+
+    Coroot registers its routes with ``UseEncodedPath``, so application and node
+    ids reach the server encoded; matching on the decoded path would hide
+    encoding bugs.
+    """
+    return request.url.raw_path.decode("ascii").split("?", 1)[0]
+
+
 @dataclass
 class FakeCoroot:
     """Minimal scripted Coroot backend.
@@ -58,7 +68,7 @@ class FakeCoroot:
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
-        path = request.url.path
+        path = raw_path(request)
         if request.method == "POST" and path == "/api/login":
             payload = json.loads(request.content or b"{}")
             if (
@@ -85,7 +95,9 @@ class FakeCoroot:
             < 0
         ):
             return httpx.Response(401, text="")
-        handler = self.routes.get((request.method, path))
+        handler = self.routes.get((request.method, path)) or self.routes.get(
+            (request.method, request.url.path)
+        )
         if handler is None:
             # Coroot's SPA catch-all: unknown /api paths return HTML with 200.
             return httpx.Response(
@@ -100,7 +112,12 @@ class FakeCoroot:
         return self.requests[-1]
 
     def calls(self, method: str, path: str) -> list[httpx.Request]:
-        return [r for r in self.requests if r.method == method and r.url.path == path]
+        return [r for r in self.requests if r.method == method and raw_path(r) == path]
+
+    @property
+    def last_path(self) -> str:
+        """The percent-encoded path of the most recent request."""
+        return raw_path(self.last)
 
     @staticmethod
     def body(request: httpx.Request) -> Any:
