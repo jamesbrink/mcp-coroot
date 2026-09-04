@@ -631,3 +631,110 @@ async def test_node_lookup_and_log_severity_pass_through(
     async with make_client(fake, settings) as client:
         result = await call(client, "get_node", node="node-1")
     assert result["checks"][0]["title"] == "CPU"
+
+
+async def test_incident_detail_includes_rca(
+    fake: FakeCoroot, settings: Settings
+) -> None:
+    project(fake).on(
+        "GET",
+        "/api/project/p1/incident/inc1",
+        enveloped(
+            {
+                "key": "inc1",
+                "application_id": "p1:ns:Deployment:api",
+                "severity": "critical",
+                "opened_at": 1704067200000,
+                "resolved_at": None,
+                "short_description": "Latency SLO violated",
+                "availability_slo": {
+                    "objective": 99.9,
+                    "compliance": 99.1,
+                    "violated": True,
+                },
+                "actual_from": 1704063600000,
+                "actual_to": 1704070800000,
+                "rca": {
+                    "status": "OK",
+                    "short_summary": "database contention",
+                    "root_cause": "lock waits on orders table",
+                    "immediate_fixes": "add an index",
+                },
+                "details": {"availability_impact": {"percentage": 4.2}},
+            }
+        ),
+    )
+    async with make_client(fake, settings) as client:
+        result = await call(client, "get_incident", incident_key="inc1")
+    assert result["open"] is True
+    assert result["opened_at"] == "2024-01-01T00:00:00Z"
+    assert result["availability_slo"]["violated"] is True
+    assert result["rca"]["root_cause"] == "lock waits on orders table"
+    assert result["details"]["availability_impact"]["percentage"] == 4.2
+
+
+async def test_trace_errors_and_project_wide_trace(
+    fake: FakeCoroot, settings: Settings
+) -> None:
+    project(fake).on(
+        "GET",
+        "/api/project/p1/overview/traces",
+        enveloped(
+            {
+                "traces": {
+                    "errors": [
+                        {
+                            "service_name": "checkout",
+                            "span_name": "POST /pay",
+                            "count": 12,
+                            "sample_trace_id": "t1",
+                            "sample_error": "upstream timeout",
+                        }
+                    ],
+                    "trace": [
+                        {
+                            "service": "checkout",
+                            "name": "POST /pay",
+                            "id": "s1",
+                            "timestamp": 1704067200000,
+                            "duration": 501.2,
+                        }
+                    ],
+                }
+            }
+        ),
+    )
+    async with make_client(fake, settings) as client:
+        errors = await call(client, "get_trace_errors", service="checkout")
+        assert errors["errors"][0]["sample_trace_id"] == "t1"
+
+        # Without app_id the trace is fetched through the project-wide view.
+        trace = await call(client, "get_trace", trace_id="t1")
+    assert trace["span_count"] == 1
+    assert trace["spans"][0]["service"] == "checkout"
+
+
+async def test_project_scoped_logs_use_the_application_endpoint(
+    fake: FakeCoroot, settings: Settings
+) -> None:
+    project(fake).on(
+        "GET",
+        "/api/project/p1/app/p1%3Ans%3ADeployment%3Aapi/logs",
+        enveloped(
+            {
+                "entries": [
+                    {"timestamp": 1704067200000, "severity": "error", "message": "x"}
+                ]
+            }
+        ),
+    )
+    async with make_client(fake, settings) as client:
+        result = await call(
+            client, "get_logs", app_id="ns:Deployment:api", trace_id="t1", limit=5
+        )
+    assert result["application_id"] == "p1:ns:Deployment:api"
+    import json
+
+    query = json.loads(dict(fake.last.url.params)["query"])
+    assert {"name": "TraceId", "op": "=", "value": "t1"} in query["filters"]
+    assert query["limit"] == 5
