@@ -802,3 +802,44 @@ async def test_empty_telemetry_responses_do_not_crash(
         profile = await call(client, "get_profile", app_id="ns:Deployment:api")
     assert profile.get("hotspots") is None
     assert "Clickhouse" in profile["message"]
+
+
+async def test_trace_latency_sends_float_seconds(
+    fake: FakeCoroot, settings: Settings
+) -> None:
+    # Coroot parses dur_from/dur_to as float seconds (utils.ParseHeatmapDuration).
+    # A Go-style duration such as "1s" fails its ParseFloat and selects nothing,
+    # which makes the server diff against a nil flame graph.
+    project(fake).on(
+        "GET",
+        "/api/project/p1/overview/traces",
+        enveloped(
+            {"traces": {"latency": {"flamegraph": {"name": "root", "total": 10}}}}
+        ),
+    )
+    import json
+
+    async with make_client(fake, settings) as client:
+        result = await call(client, "get_trace_latency", slower_than="500ms")
+        query = json.loads(dict(fake.last.url.params)["query"])
+        assert query["dur_from"] == "0.5"
+        assert "dur_to" not in query
+        # An unset upper bound is dropped rather than reported as null.
+        assert result["band"] == {"slower_than_seconds": 0.5}
+
+        await call(client, "get_trace_latency", slower_than="1s", faster_than="5s")
+        query = json.loads(dict(fake.last.url.params)["query"])
+        assert (query["dur_from"], query["dur_to"]) == ("1", "5")
+
+
+async def test_trace_latency_rejects_an_empty_band(
+    fake: FakeCoroot, settings: Settings
+) -> None:
+    project(fake)
+    async with make_client(fake, settings) as client:
+        zero = await call_error(client, "get_trace_latency", slower_than="0s")
+        inverted = await call_error(
+            client, "get_trace_latency", slower_than="5s", faster_than="1s"
+        )
+    assert "greater than zero" in zero
+    assert "must be greater than slower_than" in inverted
