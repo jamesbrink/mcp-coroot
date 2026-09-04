@@ -7,9 +7,10 @@ from typing import Annotated, Any
 from mcp.server.mcpserver import MCPServer
 from pydantic import Field
 
+from ...client.ids import normalize_app_id
 from ...client.timerange import ms_to_iso
 from ...config import Settings
-from ..app import DESTRUCTIVE, READ_ONLY, WRITE
+from ..app import CREATE, DESTRUCTIVE, READ_ONLY, WRITE
 from ..compact import compact, limit_items, status_counts
 from ..errors import guard, one_of
 from ..state import AppState, ToolContext
@@ -37,6 +38,20 @@ def _incident_digest(incident: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _is_firing(alert: dict[str, Any]) -> bool:
+    """Whether Coroot considers an alert still firing.
+
+    It counts an alert as resolved when it resolved itself, when somebody
+    resolved it by hand, or when it was suppressed (``db/alert.go``), so all
+    three have to be checked.
+    """
+    return not (
+        (alert.get("resolved_at") or 0) > 0
+        or (alert.get("manually_resolved_at") or 0) > 0
+        or bool(alert.get("suppressed"))
+    )
+
+
 def _alert_digest(alert: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": alert.get("id"),
@@ -45,9 +60,12 @@ def _alert_digest(alert: dict[str, Any]) -> dict[str, Any]:
         "severity": alert.get("severity"),
         "summary": alert.get("summary"),
         "opened_at": ms_to_iso(alert.get("opened_at")),
-        "resolved_at": ms_to_iso(alert.get("resolved_at")),
-        "firing": alert.get("resolved_at") in (None, 0),
+        "resolved_at": ms_to_iso(
+            alert.get("resolved_at") or alert.get("manually_resolved_at")
+        ),
+        "firing": _is_firing(alert),
         "suppressed": bool(alert.get("suppressed")),
+        "resolved_by": alert.get("resolved_by") or None,
     }
 
 
@@ -88,10 +106,11 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
         )
         incidents = [i for i in (result.data or []) if isinstance(i, dict)]
         digests = [_incident_digest(i) for i in incidents]
+        wanted_app = normalize_app_id(app_id, project_id=pid) if app_id else None
         matched = [
             d
             for d in digests
-            if (app_id is None or d.get("application_id") == app_id)
+            if (wanted_app is None or d.get("application_id") == wanted_app)
             and (
                 wanted == "any"
                 or (wanted == "open" and d["open"])
@@ -110,8 +129,10 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
                 "open_in_scan": sum(1 for d in digests if d["open"]),
                 "incidents": kept,
                 "note": (
-                    f"Only the {len(digests)} most recent incidents were scanned; "
-                    "older ones may also match. Narrow the time range to see them."
+                    f"Only {len(digests)} incidents were scanned (open ones "
+                    "first, then most recent); older ones may also match. "
+                    "Coroot does not filter incidents by time, so raise limit "
+                    "rather than narrowing the window."
                 )
                 if filtering and len(digests) >= scan
                 else None,
@@ -188,9 +209,9 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
         )
         # Coroot matches `search` against the application id server-side, which
         # is the only way to filter by application without scanning every page.
-        server_search = app_id or search
         # It cannot return resolved alerts alone, so that state is filtered here
         # and needs a wider scan than the caller asked for.
+        server_search = normalize_app_id(app_id, project_id=pid) if app_id else search
         filtering = wanted == "resolved" or app_id is not None or search is not None
         scan = min(max(limit * 5, 200), MAX_SCAN) if filtering else limit
         result = await state.coroot.alerts.list(
@@ -203,10 +224,11 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
         alerts = [a for a in (data.get("alerts") or []) if isinstance(a, dict)]
         digests = [_alert_digest(a) for a in alerts]
         needle = (search or "").lower()
+        wanted_app = normalize_app_id(app_id, project_id=pid) if app_id else None
         matched = [
             d
             for d in digests
-            if (app_id is None or d.get("application_id") == app_id)
+            if (wanted_app is None or d.get("application_id") == wanted_app)
             and (
                 wanted == "any"
                 or (wanted == "firing" and d["firing"])
@@ -224,7 +246,10 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
             state,
             {
                 "project_id": pid,
-                "project_totals": {
+                # Coroot computes these over the same search it applied, so
+                # they are project-wide only when no filter was passed.
+                "totals": {
+                    "scope": "search" if server_search else "project",
                     "firing": data.get("firing"),
                     "resolved": data.get("resolved"),
                     "total": data.get("total"),
@@ -233,7 +258,7 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
                 "matched": len(matched),
                 "returned": len(kept),
                 "omitted": omitted or None,
-                "by_severity": status_counts(alerts, key="severity"),
+                "by_severity": status_counts(matched, key="severity"),
                 "alerts": kept,
                 "note": (
                     f"Only the {len(digests)} most recent alerts were scanned; "
@@ -330,7 +355,7 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
     if settings.read_only:
         return
 
-    @mcp.tool(title="Resolve alerts", annotations=WRITE)
+    @mcp.tool(title="Resolve alerts", annotations=DESTRUCTIVE)
     @guard
     async def resolve_alerts(
         ctx: ToolContext,
@@ -346,7 +371,7 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
         await state.coroot.alerts.resolve(pid, alert_ids)
         return ok(f"Resolved {len(alert_ids)} alert(s)", project_id=pid)
 
-    @mcp.tool(title="Suppress alerts", annotations=WRITE)
+    @mcp.tool(title="Suppress alerts", annotations=DESTRUCTIVE)
     @guard
     async def suppress_alerts(
         ctx: ToolContext,
@@ -370,7 +395,7 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
         await state.coroot.alerts.reopen(pid, alert_ids)
         return ok(f"Reopened {len(alert_ids)} alert(s)", project_id=pid)
 
-    @mcp.tool(title="Create an alerting rule", annotations=WRITE)
+    @mcp.tool(title="Create an alerting rule", annotations=CREATE)
     @guard
     async def create_alerting_rule(
         ctx: ToolContext,
@@ -402,7 +427,7 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
         rule_id = created.get("id") if isinstance(created, dict) else None
         return ok("Created alerting rule", project_id=pid, rule_id=rule_id)
 
-    @mcp.tool(title="Update an alerting rule", annotations=WRITE)
+    @mcp.tool(title="Update an alerting rule", annotations=DESTRUCTIVE)
     @guard
     async def update_alerting_rule(
         ctx: ToolContext,

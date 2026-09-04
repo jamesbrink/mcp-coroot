@@ -14,7 +14,7 @@ import sys
 from collections.abc import Sequence
 from dataclasses import replace
 
-from . import __version__
+from ._version import __version__
 from .config import ConfigError, Settings
 from .server import build_server
 

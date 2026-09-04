@@ -1,10 +1,46 @@
-"""MCP server for the Coroot observability platform."""
+"""MCP server for the Coroot observability platform.
 
-from importlib.metadata import PackageNotFoundError, version
+The MCP server is the primary entry point (``mcp-coroot`` on the command line),
+but :class:`CorootClient` is usable on its own as an async client for Coroot's
+API::
 
-try:
-    __version__ = version("mcp-coroot")
-except PackageNotFoundError:  # pragma: no cover - only when running from source
-    __version__ = "0.0.0+unknown"
+    from mcp_coroot import CorootClient, Settings
 
-__all__ = ["__version__"]
+    async with CorootClient(Settings.from_env()) as coroot:
+        projects = await coroot.projects.list()
+"""
+
+from ._version import __version__
+from .client import (
+    ApplicationId,
+    CorootAuthenticationError,
+    CorootClient,
+    CorootConflictError,
+    CorootConnectionError,
+    CorootError,
+    CorootNotFoundError,
+    CorootPermissionError,
+    CorootServerError,
+    CorootUnsupportedError,
+    CorootValidationError,
+    normalize_app_id,
+)
+from .config import ConfigError, Settings
+
+__all__ = [
+    "ApplicationId",
+    "ConfigError",
+    "CorootAuthenticationError",
+    "CorootClient",
+    "CorootConflictError",
+    "CorootConnectionError",
+    "CorootError",
+    "CorootNotFoundError",
+    "CorootPermissionError",
+    "CorootServerError",
+    "CorootUnsupportedError",
+    "CorootValidationError",
+    "Settings",
+    "__version__",
+    "normalize_app_id",
+]

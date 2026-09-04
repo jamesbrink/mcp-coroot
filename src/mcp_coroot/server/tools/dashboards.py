@@ -9,7 +9,7 @@ from pydantic import Field
 
 from ...client.dashboards import build_panel, metrics_query
 from ...config import Settings
-from ..app import DESTRUCTIVE, READ_ONLY, WRITE
+from ..app import CREATE, DESTRUCTIVE, READ_ONLY, WRITE
 from ..compact import compact_dict
 from ..errors import guard
 from ..state import AppState, ToolContext
@@ -112,7 +112,7 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
     if settings.read_only:
         return
 
-    @mcp.tool(title="Create a dashboard", annotations=WRITE)
+    @mcp.tool(title="Create a dashboard", annotations=CREATE)
     @guard
     async def create_dashboard(
         ctx: ToolContext,
@@ -150,7 +150,7 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
         )
         return ok(f"Updated dashboard {dashboard_id}", project_id=pid, name=name)
 
-    @mcp.tool(title="Replace a dashboard's panels", annotations=WRITE)
+    @mcp.tool(title="Replace a dashboard's panels", annotations=DESTRUCTIVE)
     @guard
     async def update_dashboard_panels(
         ctx: ToolContext,

@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Annotated, Any
 
 from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import Field
 
 from ...client.applications import (
@@ -17,6 +18,7 @@ from ...client.ids import PROJECT_SCOPE_APP_ID, normalize_app_id
 from ...config import Settings
 from ..app import DESTRUCTIVE, READ_ONLY, WRITE
 from ..errors import guard, one_of
+from ..secrets import find_placeholders, redact_secrets
 from ..state import AppState, ToolContext
 from ._common import AppIdParam, ProjectIdParam, context, ok, respond, target
 
@@ -156,12 +158,18 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
         integration_type: IntegrationTypeParam,
         project_id: ProjectIdParam = None,
     ) -> dict[str, Any]:
-        """Get one integration's settings. Secrets read back as '<hidden>'."""
+        """Get one integration's settings, with its credentials redacted.
+
+        Coroot returns tokens, keys and passwords in clear to any account that
+        may edit integrations, so this server redacts them rather than copying
+        them into the conversation. Set COROOT_REVEAL_SECRETS to read them.
+        """
         state, pid = await target(ctx, project_id)
         kind = one_of(integration_type, INTEGRATION_TYPES, name="integration_type")
         data = await state.coroot.integrations.get(pid, kind)
         payload = data if isinstance(data, dict) else {"value": data}
-        return respond(state, {"project_id": pid, "type": kind, **payload})
+        safe = redact_secrets(payload, reveal=state.settings.reveal_secrets)
+        return respond(state, {"project_id": pid, "type": kind, **safe})
 
     @mcp.tool(title="Get database instrumentation", annotations=READ_ONLY)
     @guard
@@ -179,16 +187,23 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
         ],
         project_id: ProjectIdParam = None,
     ) -> dict[str, Any]:
-        """Get the credentials and port Coroot uses to collect database statistics."""
+        """Check how Coroot collects statistics from a database.
+
+        Reports the port, parameters and whether collection is enabled. The
+        stored username and password are redacted, because Coroot returns them
+        in clear to accounts that may edit them; set COROOT_REVEAL_SECRETS to
+        read them.
+        """
         state, pid = await target(ctx, project_id)
         kind = one_of(db_type, INSTRUMENTATION_TYPES, name="db_type")
         data = await state.coroot.applications.get_instrumentation(pid, app_id, kind)
+        safe = redact_secrets(data, reveal=state.settings.reveal_secrets)
         return respond(
             state,
             {
                 "project_id": pid,
                 "application_id": normalize_app_id(app_id, project_id=pid),
-                **data,
+                **safe,
             },
         )
 
@@ -409,10 +424,17 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
 
         Coroot validates and connects before saving, so an invalid endpoint or
         token is reported as an error. Read the current shape with
-        get_integration first.
+        get_integration first, but note that its credentials come back redacted:
+        replace those placeholders with real values, never send one back.
         """
         state, pid = await target(ctx, project_id)
         kind = one_of(integration_type, INTEGRATION_TYPES, name="integration_type")
+        if masked := find_placeholders(config):
+            raise ToolError(
+                f"config still holds a redaction placeholder at: {', '.join(masked)}. "
+                "Coroot would store it verbatim and break the integration. Supply "
+                "the real secret values, or leave the integration as it is."
+            )
         if test_only:
             await state.coroot.integrations.test(pid, kind, config)
             return ok(f"{kind} integration test succeeded", project_id=pid, type=kind)
@@ -502,6 +524,13 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
         """
         state, pid = await target(ctx, project_id)
         kind = one_of(db_type, INSTRUMENTATION_TYPES, name="db_type")
+        if placeholders := find_placeholders(
+            {"username": username, "password": password}
+        ):
+            raise ToolError(
+                f"the {', '.join(placeholders)} value is a redaction placeholder, "
+                "not a real credential. Supply the actual value."
+            )
         config: dict[str, Any] = {
             "type": kind,
             "port": port or INSTRUMENTATION_DEFAULT_PORTS[kind],

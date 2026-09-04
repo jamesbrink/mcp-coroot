@@ -8,7 +8,7 @@ from mcp.server.mcpserver import MCPServer
 from pydantic import Field
 
 from ...config import Settings
-from ..app import DESTRUCTIVE, READ_ONLY, WRITE
+from ..app import CREATE, DESTRUCTIVE, READ_ONLY, WRITE
 from ..errors import guard
 from ..state import AppState, ToolContext
 from ._common import ProjectIdParam, context, ok, respond, target
@@ -202,7 +202,7 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
         await state.project_choices(refresh=True)
         return ok(f"Deleted project {project_id}", project_id=project_id)
 
-    @mcp.tool(title="Create an API key", annotations=WRITE)
+    @mcp.tool(title="Create an API key", annotations=CREATE)
     @guard
     async def create_api_key(
         ctx: ToolContext,

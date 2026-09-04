@@ -17,6 +17,9 @@ Environment variables:
 ``COROOT_TIMEOUT``         HTTP timeout in seconds (default 30).
 ``COROOT_VERIFY_SSL``      ``false`` to skip TLS verification (default ``true``).
 ``COROOT_READ_ONLY``       ``true`` to hide every tool that modifies Coroot.
+``COROOT_REVEAL_SECRETS``  ``true`` to let integration and database credentials
+                           reach the model. Off by default: Coroot returns them
+                           in clear to accounts that may edit them.
 ``COROOT_MAX_OUTPUT_CHARS`` Character budget for a single tool response (default 40000).
 """
 
@@ -95,6 +98,7 @@ class Settings:
     timeout: float = DEFAULT_TIMEOUT
     verify_ssl: bool = True
     read_only: bool = False
+    reveal_secrets: bool = False
     max_output_chars: int = DEFAULT_MAX_OUTPUT_CHARS
 
     def __post_init__(self) -> None:
@@ -104,6 +108,13 @@ class Settings:
             raise ConfigError(
                 "COROOT_BASE_URL must be an http(s) URL such as "
                 f"http://localhost:8080, got {self.base_url!r}"
+            )
+        if parts.username or parts.password:
+            # Credentials in the URL would survive redacted(), and reach logs,
+            # --check output and tool responses.
+            raise ConfigError(
+                "COROOT_BASE_URL must not embed credentials; put them in "
+                "COROOT_USERNAME and COROOT_PASSWORD instead"
             )
         object.__setattr__(self, "base_url", url)
         if self.timeout <= 0:
@@ -140,6 +151,9 @@ class Settings:
             read_only=_parse_bool(
                 "COROOT_READ_ONLY", source.get("COROOT_READ_ONLY"), False
             ),
+            reveal_secrets=_parse_bool(
+                "COROOT_REVEAL_SECRETS", source.get("COROOT_REVEAL_SECRETS"), False
+            ),
             max_output_chars=_parse_int(
                 "COROOT_MAX_OUTPUT_CHARS",
                 source.get("COROOT_MAX_OUTPUT_CHARS"),
@@ -173,5 +187,6 @@ class Settings:
             "timeout": self.timeout,
             "verify_ssl": self.verify_ssl,
             "read_only": self.read_only,
+            "reveal_secrets": self.reveal_secrets,
             "max_output_chars": self.max_output_chars,
         }

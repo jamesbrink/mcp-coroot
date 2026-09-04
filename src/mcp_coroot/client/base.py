@@ -17,7 +17,7 @@ from typing import Any
 
 import httpx2 as httpx
 
-from .. import __version__
+from .._version import __version__
 from ..config import API_KEY_HEADER, SESSION_COOKIE_NAME, Settings
 from .errors import (
     CorootAuthenticationError,

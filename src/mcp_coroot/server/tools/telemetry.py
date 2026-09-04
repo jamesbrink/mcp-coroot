@@ -293,11 +293,11 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
         from_time: FromParam = None,
         to_time: ToParam = None,
     ) -> dict[str, Any]:
-        """Explain a high p99 by comparing slow traces against normal ones.
+        """Explain a high p99 by showing where slow requests spend their time.
 
-        Returns where the extra time is spent, as the heaviest frames of a
-        differential flame graph. Start with the p99 that get_traces reported as
-        slower_than.
+        Returns the heaviest frames of a flame graph built from traces inside
+        the band. Sizes from get_traces are in SECONDS, so pass them with a unit
+        ('1.85s'), not as a bare number: a bare number is read as milliseconds.
         """
         state, pid = await target(ctx, project_id)
         # Coroot parses these bounds as float seconds, not as durations, and a
@@ -319,7 +319,11 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
             filters=_trace_filters(service, span),
             dur_from=_seconds(dur_from),
             dur_to=_seconds(dur_to) if dur_to is not None else None,
-            diff=True,
+            # Never ask for the differential view. Coroot builds it with
+            # FlameGraphNode.Diff, which dereferences its argument without a nil
+            # check, and either side is nil when the band or its complement
+            # selects no traces -- which crashes the request handler.
+            diff=False,
             from_=from_time,
             to=to_time,
         )
