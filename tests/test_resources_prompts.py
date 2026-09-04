@@ -105,7 +105,7 @@ async def test_prompts_are_listed_and_rendered(
         content = rendered.messages[0].content
         assert isinstance(content, TextContent)
         assert "p1:default:Deployment:api" in content.text
-        assert "get_traces" in content.text
+        assert "summarize_trace_endpoints" in content.text
 
         incident = await client.get_prompt("review_incident", {"incident_key": "inc1"})
         incident_content = incident.messages[0].content

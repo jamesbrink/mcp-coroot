@@ -35,11 +35,11 @@ Work in this order and stop as soon as the evidence explains the problem:
    audit reports are warning or critical.
 2. If SLO checks are failing, call list_incidents for the application and open
    the most recent one with get_incident.
-3. For latency: call get_traces filtered to the application's service, then
-   get_trace_latency to see where the slow requests spend their time. Pull one
-   example with get_trace.
-4. For errors: call get_trace_errors for failure reasons, and get_logs with
-   severity error for the same window.
+3. For latency: call summarize_trace_endpoints for the application's service,
+   then explain_trace_latency for where the slow requests spend their time.
+   Pull one example with list_traces, then get_trace_by_id.
+4. For errors: call list_trace_error_reasons for failure reasons, and get_logs
+   with severity error for the same window.
 5. Check whether something changed: list_deployments over a window that starts
    before the problem did.
 6. Check the dependencies: get_service_map, then repeat step 1 for any upstream

@@ -16,6 +16,8 @@ Environment variables:
 ``COROOT_PROJECT``         Default project id used when a tool omits ``project_id``.
 ``COROOT_TIMEOUT``         HTTP timeout in seconds (default 30).
 ``COROOT_VERIFY_SSL``      ``false`` to skip TLS verification (default ``true``).
+``COROOT_TOOLSETS``        Which groups of tools to expose, comma separated.
+                           Defaults to ``diagnose``; ``all`` exposes everything.
 ``COROOT_READ_ONLY``       ``true`` to hide every tool that modifies Coroot.
 ``COROOT_REVEAL_SECRETS``  ``true`` to let integration and database credentials
                            reach the model. Off by default: Coroot returns them
@@ -40,6 +42,13 @@ SESSION_COOKIE_NAME = "coroot_session"
 API_KEY_HEADER = "X-API-Key"
 
 AuthMode = Literal["session_cookie", "password", "api_key", "none"]
+
+#: Groups a deployment can choose between. ``diagnose`` is everything needed to
+#: investigate a running system; the rest configure Coroot itself, and carrying
+#: them in every conversation costs context an incident does not have to spare.
+TOOLSETS: tuple[str, ...] = ("diagnose", "alerts", "dashboards", "config", "admin")
+
+DEFAULT_TOOLSETS: frozenset[str] = frozenset({"diagnose"})
 
 _TRUE = frozenset({"1", "true", "yes", "on"})
 _FALSE = frozenset({"0", "false", "no", "off"})
@@ -78,6 +87,16 @@ def _parse_int(name: str, raw: str | None, default: int) -> int:
         raise ConfigError(f"{name} must be an integer, got {raw!r}") from exc
 
 
+def _parse_toolsets(raw: str | None) -> frozenset[str]:
+    """Parse ``COROOT_TOOLSETS``: a comma separated list, or ``all``."""
+    if raw is None or not raw.strip():
+        return DEFAULT_TOOLSETS
+    names = {part.strip().lower() for part in raw.split(",") if part.strip()}
+    if "all" in names:
+        return frozenset(TOOLSETS)
+    return frozenset(names)
+
+
 def _optional(raw: str | None) -> str | None:
     if raw is None:
         return None
@@ -99,6 +118,7 @@ class Settings:
     verify_ssl: bool = True
     read_only: bool = False
     reveal_secrets: bool = False
+    toolsets: frozenset[str] = DEFAULT_TOOLSETS
     max_output_chars: int = DEFAULT_MAX_OUTPUT_CHARS
 
     def __post_init__(self) -> None:
@@ -127,6 +147,12 @@ class Settings:
             raise ConfigError(
                 "COROOT_USERNAME and COROOT_PASSWORD must be set together"
             )
+        unknown = sorted(self.toolsets - set(TOOLSETS))
+        if unknown:
+            raise ConfigError(
+                f"COROOT_TOOLSETS has unknown group(s) {', '.join(unknown)}; "
+                f"valid groups are {', '.join(TOOLSETS)}, or 'all'"
+            )
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> Settings:
@@ -154,12 +180,17 @@ class Settings:
             reveal_secrets=_parse_bool(
                 "COROOT_REVEAL_SECRETS", source.get("COROOT_REVEAL_SECRETS"), False
             ),
+            toolsets=_parse_toolsets(source.get("COROOT_TOOLSETS")),
             max_output_chars=_parse_int(
                 "COROOT_MAX_OUTPUT_CHARS",
                 source.get("COROOT_MAX_OUTPUT_CHARS"),
                 DEFAULT_MAX_OUTPUT_CHARS,
             ),
         )
+
+    def enabled(self, toolset: str) -> bool:
+        """Whether tools in ``toolset`` should be registered."""
+        return toolset in self.toolsets
 
     @property
     def can_login(self) -> bool:
@@ -188,5 +219,6 @@ class Settings:
             "verify_ssl": self.verify_ssl,
             "read_only": self.read_only,
             "reveal_secrets": self.reveal_secrets,
+            "toolsets": sorted(self.toolsets),
             "max_output_chars": self.max_output_chars,
         }
