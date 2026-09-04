@@ -237,7 +237,7 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
             },
         )
 
-    if settings.read_only:
+    if settings.read_only or not settings.enabled("config"):
         return
 
     @mcp.tool(title="Set an inspection threshold", annotations=WRITE)
@@ -462,26 +462,6 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
         await state.coroot.integrations.delete(pid, kind)
         return ok(f"Deleted {kind} integration", project_id=pid, type=kind)
 
-    @mcp.tool(title="Set the notification base URL", annotations=WRITE)
-    @guard
-    async def set_notification_base_url(
-        ctx: ToolContext,
-        base_url: Annotated[
-            str,
-            Field(
-                description=(
-                    "Public Coroot URL used in notification links, e.g. "
-                    "'https://coroot.example.com'."
-                )
-            ),
-        ],
-        project_id: ProjectIdParam = None,
-    ) -> dict[str, Any]:
-        """Set the public URL Coroot puts in notification links."""
-        state, pid = await target(ctx, project_id)
-        await state.coroot.integrations.set_base_url(pid, base_url)
-        return ok("Updated notification base URL", project_id=pid, base_url=base_url)
-
     @mcp.tool(title="Configure database instrumentation", annotations=WRITE)
     @guard
     async def configure_db_instrumentation(
@@ -584,26 +564,30 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
     async def set_cloud_pricing(
         ctx: ToolContext,
         per_cpu_core: Annotated[
-            float, Field(description="Hourly price of one CPU core.", gt=0)
-        ],
+            float | None,
+            Field(description="Hourly price of one CPU core.", gt=0),
+        ] = None,
         per_memory_gb: Annotated[
-            float, Field(description="Hourly price of one GB of memory.", gt=0)
-        ],
+            float | None,
+            Field(description="Hourly price of one GB of memory.", gt=0),
+        ] = None,
         project_id: ProjectIdParam = None,
     ) -> dict[str, Any]:
-        """Override the default cloud pricing used for cost estimates."""
+        """Override the cloud pricing used for cost estimates.
+
+        Omit both prices to drop the override and go back to Coroot's built-in
+        rates.
+        """
         state, pid = await target(ctx, project_id)
+        if per_cpu_core is None and per_memory_gb is None:
+            await state.coroot.cloud_pricing.reset(pid)
+            return ok("Reset cloud pricing to Coroot's defaults", project_id=pid)
+        if per_cpu_core is None or per_memory_gb is None:
+            raise ToolError(
+                "set both per_cpu_core and per_memory_gb to override pricing, or "
+                "neither to reset it"
+            )
         await state.coroot.cloud_pricing.set(
             pid, per_cpu_core=per_cpu_core, per_memory_gb=per_memory_gb
         )
         return ok("Updated cloud pricing", project_id=pid)
-
-    @mcp.tool(title="Reset cloud pricing", annotations=DESTRUCTIVE)
-    @guard
-    async def reset_cloud_pricing(
-        ctx: ToolContext, project_id: ProjectIdParam = None
-    ) -> dict[str, Any]:
-        """Drop custom pricing and go back to Coroot's built-in rates."""
-        state, pid = await target(ctx, project_id)
-        await state.coroot.cloud_pricing.reset(pid)
-        return ok("Reset cloud pricing to defaults", project_id=pid)

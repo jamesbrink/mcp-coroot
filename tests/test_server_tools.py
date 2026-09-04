@@ -13,7 +13,7 @@ from mcp.types import TextContent
 from mcp_coroot.client import CorootClient
 from mcp_coroot.config import Settings
 from mcp_coroot.server import build_server
-from tests.conftest import FakeCoroot
+from tests.conftest import ALL_TOOLSETS, FakeCoroot
 
 CONTEXT: dict[str, Any] = {
     "status": {"status": "ok"},
@@ -84,7 +84,9 @@ async def test_tools_are_discoverable_and_annotated(
 
 
 async def test_read_only_mode_hides_mutating_tools(one_project: FakeCoroot) -> None:
-    settings = Settings(base_url="http://coroot.test", read_only=True)
+    settings = Settings(
+        base_url="http://coroot.test", read_only=True, toolsets=ALL_TOOLSETS
+    )
     async with make_client(one_project, settings) as client:
         names = {t.name for t in (await client.list_tools()).tools}
     assert "list_applications" in names
@@ -151,6 +153,7 @@ async def test_default_project_from_settings(fake: FakeCoroot) -> None:
         username="admin",
         password="secret",
         default_project="p9",
+        toolsets=ALL_TOOLSETS,
     )
     fake.on("GET", "/api/project/p9/status", enveloped({"status": "warning"}))
     async with make_client(fake, settings) as client:
@@ -461,7 +464,7 @@ async def test_traces_and_errors(one_project: FakeCoroot, settings: Settings) ->
                 }
             ),
         )
-        result = await call(client, "get_traces", service="checkout")
+        result = await call(client, "summarize_trace_endpoints", service="checkout")
         endpoint = result["endpoints"][0]
         assert endpoint["span"] == "GET /cart"
         assert endpoint["requests"] == 100
@@ -495,7 +498,7 @@ async def test_trace_latency_reduces_flamegraph(
                 }
             ),
         )
-        result = await call(client, "get_trace_latency", slower_than="2s")
+        result = await call(client, "explain_trace_latency", slower_than="2s")
         assert result["band"]["slower_than_seconds"] == 2.0
         assert result["hotspots"]["hottest"][0]["name"] == "db.query"
 
@@ -807,6 +810,7 @@ async def test_large_responses_are_truncated(fake: FakeCoroot) -> None:
         password="secret",
         default_project="p1",
         max_output_chars=3_000,
+        toolsets=ALL_TOOLSETS,
     )
     fake.on("GET", "/api/user", {"projects": [{"id": "p1", "name": "prod"}]})
     fake.on(

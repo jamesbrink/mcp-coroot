@@ -109,21 +109,3 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
         state = context(ctx)
         await state.coroot.users.delete(user_id)
         return ok(f"Deleted user {user_id}", user_id=user_id)
-
-    @mcp.tool(title="Change own password", annotations=WRITE)
-    @guard
-    async def change_password(
-        ctx: ToolContext,
-        old_password: Annotated[str, Field(description="The current password.")],
-        new_password: Annotated[str, Field(description="The new password.")],
-    ) -> dict[str, Any]:
-        """Change the password of the account this server authenticates as.
-
-        The configured COROOT_PASSWORD becomes stale afterwards, so update the
-        server's environment too.
-        """
-        state = context(ctx)
-        await state.coroot.auth.change_password(old_password, new_password)
-        return ok(
-            "Password changed. Update COROOT_PASSWORD so the server can log in again."
-        )

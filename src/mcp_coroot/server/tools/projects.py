@@ -127,7 +127,8 @@ def register(mcp: MCPServer[AppState], settings: Settings) -> None:
         keys = await state.coroot.projects.api_keys(pid)
         return respond(state, {"project_id": pid, **keys})
 
-    if settings.read_only:
+    # Creating and deleting projects and keys is administration.
+    if settings.read_only or not settings.enabled("admin"):
         return
 
     @mcp.tool(title="Create a project", annotations=WRITE)

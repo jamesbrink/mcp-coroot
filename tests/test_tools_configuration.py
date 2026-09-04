@@ -13,7 +13,7 @@ from mcp.types import TextContent
 from mcp_coroot.client import CorootClient
 from mcp_coroot.config import ConfigError, Settings
 from mcp_coroot.server import build_server
-from tests.conftest import FakeCoroot
+from tests.conftest import ALL_TOOLSETS, FakeCoroot
 
 CONTEXT: dict[str, Any] = {"status": {"status": "ok"}, "search": {}}
 
@@ -236,11 +236,6 @@ async def test_integration_read_and_delete(
         await call(client, "delete_integration", integration_type="pagerduty")
         assert fake.last.method == "DELETE"
 
-        await call(
-            client, "set_notification_base_url", base_url="https://coroot2.example"
-        )
-        assert fake.body(fake.last) == {"base_url": "https://coroot2.example"}
-
         message = await call_error(
             client, "get_integration", integration_type="carrier-pigeon"
         )
@@ -319,7 +314,9 @@ async def test_cloud_pricing(fake: FakeCoroot, settings: Settings) -> None:
         assert body["per_cpu_core"] == 0.05
         assert body["default"] is False
 
-        await call(client, "reset_cloud_pricing")
+        # Omitting both prices resets to Coroot's built-in rates.
+        reset = await call(client, "set_cloud_pricing")
+        assert "Reset" in reset["message"]
     assert fake.last.method == "DELETE"
 
 
@@ -444,11 +441,6 @@ async def test_user_tools(fake: FakeCoroot, settings: Settings) -> None:
 
         await call(client, "delete_user", user_id=2)
         assert fake.body(fake.last) == {"action": "delete", "id": 2}
-
-        result = await call(
-            client, "change_password", old_password="old", new_password="new"
-        )
-    assert "COROOT_PASSWORD" in result["message"]
 
 
 # -- remaining read tools ----------------------------------------------------
@@ -658,7 +650,7 @@ async def test_get_trace_via_application(fake: FakeCoroot, settings: Settings) -
     )
     async with make_client(fake, settings) as client:
         result = await call(
-            client, "get_trace", trace_id="abc123", app_id="ns:Deployment:api"
+            client, "get_trace_by_id", trace_id="abc123", app_id="ns:Deployment:api"
         )
     assert result["span_count"] == 1
     assert result["spans"][0]["timestamp"] == "2024-01-01T00:00:00Z"
@@ -756,11 +748,11 @@ async def test_trace_errors_and_project_wide_trace(
         ),
     )
     async with make_client(fake, settings) as client:
-        errors = await call(client, "get_trace_errors", service="checkout")
+        errors = await call(client, "list_trace_error_reasons", service="checkout")
         assert errors["errors"][0]["sample_trace_id"] == "t1"
 
         # Without app_id the trace is fetched through the project-wide view.
-        trace = await call(client, "get_trace", trace_id="t1")
+        trace = await call(client, "get_trace_by_id", trace_id="t1")
     assert trace["span_count"] == 1
     assert trace["spans"][0]["service"] == "checkout"
 
@@ -844,7 +836,7 @@ async def test_empty_telemetry_responses_do_not_crash(
         ),
     )
     async with make_client(fake, settings) as client:
-        traces = await call(client, "get_traces")
+        traces = await call(client, "summarize_trace_endpoints")
         assert traces["endpoints"] == []
 
         logs = await call(client, "get_logs")
@@ -871,14 +863,14 @@ async def test_trace_latency_sends_float_seconds(
     import json
 
     async with make_client(fake, settings) as client:
-        result = await call(client, "get_trace_latency", slower_than="500ms")
+        result = await call(client, "explain_trace_latency", slower_than="500ms")
         query = json.loads(dict(fake.last.url.params)["query"])
         assert query["dur_from"] == "0.5"
         assert "dur_to" not in query
         # An unset upper bound is dropped rather than reported as null.
         assert result["band"] == {"slower_than_seconds": 0.5}
 
-        await call(client, "get_trace_latency", slower_than="1s", faster_than="5s")
+        await call(client, "explain_trace_latency", slower_than="1s", faster_than="5s")
         query = json.loads(dict(fake.last.url.params)["query"])
         assert (query["dur_from"], query["dur_to"]) == ("1", "5")
 
@@ -888,9 +880,9 @@ async def test_trace_latency_rejects_an_empty_band(
 ) -> None:
     project(fake)
     async with make_client(fake, settings) as client:
-        zero = await call_error(client, "get_trace_latency", slower_than="0s")
+        zero = await call_error(client, "explain_trace_latency", slower_than="0s")
         inverted = await call_error(
-            client, "get_trace_latency", slower_than="5s", faster_than="1s"
+            client, "explain_trace_latency", slower_than="5s", faster_than="1s"
         )
     assert "greater than zero" in zero
     assert "must be greater than slower_than" in inverted
@@ -1220,6 +1212,7 @@ async def test_secrets_can_be_revealed_deliberately(fake: FakeCoroot) -> None:
         username="admin",
         password="secret",
         reveal_secrets=True,
+        toolsets=ALL_TOOLSETS,
     )
     fake.on("GET", "/api/user", {"projects": [{"id": "p1", "name": "prod"}]})
     fake.on(
@@ -1277,7 +1270,7 @@ async def test_trace_latency_never_requests_the_diff(
         ),
     )
     async with make_client(fake, settings) as client:
-        await call(client, "get_trace_latency", slower_than="1s")
+        await call(client, "explain_trace_latency", slower_than="1s")
     assert json.loads(dict(fake.last.url.params)["query"])["diff"] is False
 
 
@@ -1463,7 +1456,7 @@ async def test_get_traces_ranks_and_limits(
         enveloped({"traces": {"summary": {"stats": stats}}}),
     )
     async with make_client(fake, settings) as client:
-        by_errors = await call(client, "get_traces", limit=3)
+        by_errors = await call(client, "summarize_trace_endpoints", limit=3)
         assert by_errors["total_endpoints"] == 30
         assert by_errors["omitted"] == 27
         assert [e["span"] for e in by_errors["endpoints"]] == [
@@ -1473,7 +1466,9 @@ async def test_get_traces_ranks_and_limits(
         ]
         assert by_errors["endpoints"][0]["latency_seconds"] == {"p99": 29.0}
 
-        by_latency = await call(client, "get_traces", sort_by="latency", limit=1)
+        by_latency = await call(
+            client, "summarize_trace_endpoints", sort_by="latency", limit=1
+        )
     assert by_latency["endpoints"][0]["span"] == "GET /29"
 
 
@@ -1526,3 +1521,48 @@ async def test_list_traces_can_ask_for_errors_only(
     # Coroot selects error traces with the 'inf' marker in the dur_from slot.
     assert json.loads(dict(fake.last.url.params)["query"])["dur_from"] == "inf"
     assert "No traces matched" in result["note"]
+
+
+async def test_toolsets_select_what_is_registered(fake: FakeCoroot) -> None:
+    async def names(**kw: Any) -> set[str]:
+        s = Settings(base_url="http://coroot.test", username="a", password="b", **kw)
+        async with make_client(fake, s) as client:
+            return {t.name for t in (await client.list_tools()).tools}
+
+    everything = frozenset({"diagnose", "alerts", "dashboards", "config", "admin"})
+    default = await names()
+    full = await names(toolsets=everything)
+
+    # Finding a project works in every configuration.
+    assert {"list_projects", "get_project_status", "health_check"} <= default
+    # The diagnostic core is what the default is for.
+    assert {
+        "list_applications",
+        "get_application",
+        "get_logs",
+        "summarize_trace_endpoints",
+        "list_traces",
+        "get_metrics",
+        "list_alerts",
+        "list_incidents",
+    } <= default
+    # Administration is not carried unless asked for.
+    assert not {"create_user", "delete_project", "create_api_key"} & default
+    assert {"create_user", "delete_project", "create_api_key"} <= full
+    assert "list_dashboards" not in default
+    assert "list_dashboards" in (await names(toolsets=frozenset({"dashboards"})))
+    assert "resolve_alerts" not in default
+    assert "resolve_alerts" in (await names(toolsets=frozenset({"alerts"})))
+    assert len(default) < len(full)
+
+
+def test_toolsets_are_parsed_and_validated() -> None:
+    assert Settings.from_env({}).toolsets == frozenset({"diagnose"})
+    assert Settings.from_env({"COROOT_TOOLSETS": "all"}).toolsets == frozenset(
+        {"diagnose", "alerts", "dashboards", "config", "admin"}
+    )
+    assert Settings.from_env(
+        {"COROOT_TOOLSETS": " Diagnose , admin "}
+    ).toolsets == frozenset({"diagnose", "admin"})
+    with pytest.raises(ConfigError, match="unknown group"):
+        Settings.from_env({"COROOT_TOOLSETS": "diagnose,telepathy"})
