@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import httpx2 as httpx
+import pytest
 from mcp import Client
 from mcp.types import TextContent
 
 from mcp_coroot.client import CorootClient
-from mcp_coroot.config import Settings
+from mcp_coroot.config import ConfigError, Settings
 from mcp_coroot.server import build_server
 from tests.conftest import FakeCoroot
 
@@ -213,7 +215,10 @@ async def test_integration_read_and_delete(
         {"base_url": "https://coroot.example", "integrations": [{"type": "slack"}]},
     )
     fake.on(
-        "GET", "/api/project/p1/integrations/pagerduty", {"integration_key": "<hidden>"}
+        "GET",
+        "/api/project/p1/integrations/pagerduty",
+        # Coroot returns the real key to any account that may edit integrations.
+        {"integration_key": "r8k2-live-secret", "incidents": True},
     )
     fake.on("DELETE", "/api/project/p1/integrations/pagerduty")
     fake.on("PUT", "/api/project/p1/integrations")
@@ -222,7 +227,11 @@ async def test_integration_read_and_delete(
         assert listed["base_url"] == "https://coroot.example"
 
         single = await call(client, "get_integration", integration_type="pagerduty")
-        assert single["integration_key"] == "<hidden>"
+        # Coroot hands the real key to any account that may edit integrations;
+        # it must not reach the model.
+        assert single["integration_key"] == "<redacted by mcp-coroot>"
+        assert "r8k2-live-secret" not in json.dumps(single)
+        assert single["incidents"] is True
 
         await call(client, "delete_integration", integration_type="pagerduty")
         assert fake.last.method == "DELETE"
@@ -1046,7 +1055,13 @@ async def test_alert_filters_scan_beyond_the_requested_limit(
     assert result["returned"] == 3
     assert result["matched"] == 40
     assert all(not a["firing"] for a in result["alerts"])
-    assert result["project_totals"]["resolved"] == 40
+    # No search was applied here, so Coroot's counts really are project-wide.
+    assert result["totals"] == {
+        "scope": "project",
+        "firing": 3,
+        "resolved": 40,
+        "total": 43,
+    }
     # The wider scan is what makes the filter meaningful.
     assert int(dict(fake.last.url.params)["limit"]) > 3
 
@@ -1164,3 +1179,178 @@ async def test_unexpected_errors_are_reported_not_swallowed(
         message = await call_error(client, "list_nodes")
     assert "list_nodes failed unexpectedly" in message
     assert "bug in mcp-coroot" in message
+
+
+async def test_database_credentials_are_redacted(
+    fake: FakeCoroot, settings: Settings
+) -> None:
+    project(fake).on(
+        "GET",
+        "/api/project/p1/app/p1%3Ans%3AStatefulSet%3Apg/instrumentation/postgres",
+        {
+            "type": "postgres",
+            "port": "5432",
+            "enabled": True,
+            "credentials": {"username": "coroot", "password": "pg-live-password"},
+            "params": {"sslmode": "disable"},
+        },
+    )
+    async with make_client(fake, settings) as client:
+        result = await call(
+            client,
+            "get_db_instrumentation",
+            app_id="ns:StatefulSet:pg",
+            db_type="postgres",
+        )
+    assert "pg-live-password" not in json.dumps(result)
+    assert result["credentials"]["password"] == "<redacted by mcp-coroot>"
+    # Non-secret operational detail must survive redaction.
+    assert result["port"] == "5432"
+    assert result["enabled"] is True
+    assert result["params"] == {"sslmode": "disable"}
+
+
+async def test_secrets_can_be_revealed_deliberately(fake: FakeCoroot) -> None:
+    reveal = Settings(
+        base_url="http://coroot.test",
+        username="admin",
+        password="secret",
+        reveal_secrets=True,
+    )
+    fake.on("GET", "/api/user", {"projects": [{"id": "p1", "name": "prod"}]})
+    fake.on(
+        "GET",
+        "/api/project/p1/integrations/slack",
+        {"token": "xoxb-live", "default_channel": "ops"},
+    )
+    async with make_client(fake, reveal) as client:
+        result = await call(client, "get_integration", integration_type="slack")
+    assert result["token"] == "xoxb-live"
+
+
+async def test_placeholders_are_refused_on_write(
+    fake: FakeCoroot, settings: Settings
+) -> None:
+    project(fake)
+    async with make_client(fake, settings) as client:
+        redacted = await call_error(
+            client,
+            "configure_integration",
+            integration_type="slack",
+            config={"token": "<redacted by mcp-coroot>", "default_channel": "ops"},
+        )
+        hidden = await call_error(
+            client,
+            "configure_integration",
+            integration_type="teams",
+            config={"channels": [{"name": "d", "webhook_url": "<hidden>"}]},
+        )
+        creds = await call_error(
+            client,
+            "configure_db_instrumentation",
+            app_id="ns:StatefulSet:pg",
+            db_type="postgres",
+            username="coroot",
+            password="<redacted by mcp-coroot>",
+        )
+    assert "token" in redacted and "placeholder" in redacted
+    assert "channels[0].webhook_url" in hidden
+    assert "password" in creds
+    # Nothing may have been written.
+    assert [r.method for r in fake.requests if r.method in {"PUT", "POST"}] == ["POST"]
+
+
+async def test_trace_latency_never_requests_the_diff(
+    fake: FakeCoroot, settings: Settings
+) -> None:
+    # Coroot's FlameGraphNode.Diff dereferences its argument without a nil
+    # check, and either side is nil when the band or its complement is empty.
+    project(fake).on(
+        "GET",
+        "/api/project/p1/overview/traces",
+        enveloped(
+            {"traces": {"latency": {"flamegraph": {"name": "root", "total": 1}}}}
+        ),
+    )
+    async with make_client(fake, settings) as client:
+        await call(client, "get_trace_latency", slower_than="1s")
+    assert json.loads(dict(fake.last.url.params)["query"])["diff"] is False
+
+
+async def test_manually_resolved_and_suppressed_alerts_are_not_firing(
+    fake: FakeCoroot, settings: Settings
+) -> None:
+    # Coroot treats an alert as resolved if it resolved itself, a person
+    # resolved it, or it was suppressed.
+    project(fake).on(
+        "GET",
+        "/api/project/p1/alerts",
+        enveloped(
+            {
+                "alerts": [
+                    {"id": "a1", "severity": "critical", "resolved_at": None},
+                    {
+                        "id": "a2",
+                        "severity": "warning",
+                        "resolved_at": 0,
+                        "manually_resolved_at": 1704067200000,
+                        "resolved_by": "sre",
+                    },
+                    {
+                        "id": "a3",
+                        "severity": "warning",
+                        "resolved_at": 0,
+                        "suppressed": True,
+                    },
+                ],
+                "total": 3,
+                "firing": 1,
+                "resolved": 2,
+            }
+        ),
+    )
+    async with make_client(fake, settings) as client:
+        firing = await call(client, "list_alerts", state_filter="firing")
+        resolved = await call(client, "list_alerts", state_filter="resolved")
+    assert [a["id"] for a in firing["alerts"]] == ["a1"]
+    assert sorted(a["id"] for a in resolved["alerts"]) == ["a2", "a3"]
+    assert resolved["alerts"][0]["resolved_by"] == "sre"
+    # by_severity must describe what was returned, not the whole scan.
+    assert firing["by_severity"] == {"critical": 1}
+
+
+async def test_alert_app_filter_normalises_the_id(
+    fake: FakeCoroot, settings: Settings
+) -> None:
+    project(fake).on(
+        "GET",
+        "/api/project/p1/alerts",
+        enveloped(
+            {
+                "alerts": [
+                    {
+                        "id": "a1",
+                        "application_id": "p1:ns:Deployment:api",
+                        "severity": "warning",
+                        "resolved_at": None,
+                    }
+                ],
+                "total": 1,
+                "firing": 1,
+                "resolved": 0,
+            }
+        ),
+    )
+    async with make_client(fake, settings) as client:
+        # A three-part id must still match the four-part id Coroot returns.
+        result = await call(client, "list_alerts", app_id="ns:Deployment:api")
+    assert [a["id"] for a in result["alerts"]] == ["a1"]
+    assert dict(fake.last.url.params)["search"] == "p1:ns:Deployment:api"
+    assert result["totals"]["scope"] == "search"
+
+
+def test_base_url_must_not_carry_credentials() -> None:
+    # Userinfo in the URL would survive redacted() and reach logs, --check
+    # output and tool responses.
+    with pytest.raises(ConfigError, match="must not embed credentials"):
+        Settings(base_url="https://admin:hunter2@coroot.example.com")

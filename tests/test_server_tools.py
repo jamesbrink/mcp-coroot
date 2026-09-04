@@ -602,7 +602,12 @@ async def test_incidents_and_alerts(
         alerts = await call(client, "list_alerts")
         assert alerts["alerts"][0]["firing"] is True
         assert alerts["by_severity"] == {"critical": 1}
-        assert alerts["project_totals"] == {"firing": 1, "resolved": 0, "total": 1}
+        assert alerts["totals"] == {
+            "scope": "project",
+            "firing": 1,
+            "resolved": 0,
+            "total": 1,
+        }
 
         one_project.on("POST", "/api/project/p1/alerts/resolve", status=204)
         resolved = await call(client, "resolve_alerts", alert_ids=["a1"])
