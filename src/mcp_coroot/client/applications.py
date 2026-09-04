@@ -8,7 +8,7 @@ from typing import Any
 from .base import BaseAPI, Enveloped, JsonValue, split_envelope
 from .errors import CorootValidationError
 from .ids import PROJECT_SCOPE_APP_ID, encode_segment, normalize_app_id
-from .timerange import TimeInput, time_params, to_coroot_time
+from .timerange import TimeInput, resolve_epoch_ms, time_params
 
 #: ``{type}`` values accepted by the instrumentation endpoint.
 INSTRUMENTATION_TYPES: tuple[str, ...] = (
@@ -95,6 +95,13 @@ LOG_SEVERITIES: tuple[str, ...] = (
 )
 
 
+def _absolute(value: TimeInput) -> str:
+    """Render a time bound as epoch milliseconds, or "" when it is unset."""
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return ""
+    return str(resolve_epoch_ms(value))
+
+
 def build_trace_param(
     *,
     source: str = "",
@@ -108,9 +115,12 @@ def build_trace_param(
 
     Format: ``source:traceId:tsFrom-tsTo:durFrom-durTo``. ``dur_from``/``dur_to``
     are seconds (floats) or the markers ``inf`` / ``err`` (errors only).
+
+    Coroot splits the timestamp range on its first ``-``, so relative bounds are
+    resolved to epoch milliseconds before they are joined.
     """
-    start = to_coroot_time(ts_from) or ""
-    end = to_coroot_time(ts_to) or ""
+    start = _absolute(ts_from)
+    end = _absolute(ts_to)
     ts = f"{start}-{end}" if (start or end) else ""
     d_from = "" if dur_from is None else str(dur_from)
     d_to = "" if dur_to is None else str(dur_to)
