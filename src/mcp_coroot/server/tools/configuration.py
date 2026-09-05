@@ -1,0 +1,576 @@
+"""Tools for inspections, categories, custom apps, pricing and integrations."""
+
+from __future__ import annotations
+
+from typing import Annotated, Any, Literal
+
+from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
+from pydantic import Field
+
+from ...client.applications import CHECK_IDS, INSTRUMENTATION_DEFAULT_PORTS
+from ...client.configuration import INTEGRATION_TYPES
+from ...client.ids import PROJECT_SCOPE_APP_ID, normalize_app_id
+from ...config import Settings
+from ..app import DESTRUCTIVE, READ_ONLY, WRITE
+from ..errors import guard, one_of
+from ..secrets import find_placeholders, redact_secrets
+from ..state import AppState, ToolContext
+from ._common import AppIdParam, ProjectIdParam, context, ok, respond, target
+
+CheckIdParam = Annotated[
+    str,
+    Field(
+        description=(
+            "Check id from list_inspections, e.g. 'CPUContainer', 'SLOLatency', "
+            "'StorageSpace', 'LogErrors'."
+        )
+    ),
+]
+
+IntegrationType = Literal[
+    "prometheus",
+    "clickhouse",
+    "aws",
+    "slack",
+    "teams",
+    "pagerduty",
+    "opsgenie",
+    "webhook",
+]
+
+IntegrationTypeParam = Annotated[
+    IntegrationType, Field(description="Which integration to act on.")
+]
+
+DatabaseType = Literal["postgres", "mysql", "redis", "mongodb", "memcached"]
+
+DatabaseTypeParam = Annotated[
+    DatabaseType, Field(description="Which database engine the application runs.")
+]
+
+ScopeAppParam = Annotated[
+    str | None,
+    Field(
+        description=(
+            "Application id to scope the setting to. Omit for the project-wide default."
+        )
+    ),
+]
+
+
+def register(mcp: MCPServer[AppState], settings: Settings) -> None:
+    @mcp.tool(title="Get inspection checks", annotations=READ_ONLY)
+    @guard
+    async def get_inspections(
+        ctx: ToolContext,
+        project_id: ProjectIdParam = None,
+        check_id: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Return one check's configuration in full, e.g. "
+                    "'CPUContainer' or 'SLOLatency'. Omit to list every check "
+                    "with its thresholds."
+                )
+            ),
+        ] = None,
+        app_id: ScopeAppParam = None,
+    ) -> dict[str, Any]:
+        """List Coroot's health checks, or read one check's configuration.
+
+        The listing shows each check's built-in threshold, the project-wide
+        override and any per-application overrides. For one check, the configs
+        are positional: index 0 is Coroot's default, 1 the project override and
+        2 the application override, with null meaning "not set".
+        """
+        state, pid = await target(ctx, project_id)
+        if check_id:
+            scope = app_id or PROJECT_SCOPE_APP_ID
+            data = await state.coroot.applications.get_inspection_config(
+                pid, scope, one_of(check_id, CHECK_IDS, name="check_id")
+            )
+            return respond(
+                state,
+                {
+                    "project_id": pid,
+                    "check_id": check_id,
+                    "scope": "project" if scope == PROJECT_SCOPE_APP_ID else scope,
+                    **data,
+                },
+            )
+
+        result = await state.coroot.inspections.list(pid)
+        listing = result.data if isinstance(result.data, dict) else {}
+        checks = [
+            {
+                "id": c.get("id"),
+                "title": c.get("title"),
+                "category": c.get("category"),
+                "unit": c.get("unit"),
+                "global_threshold": c.get("global_threshold"),
+                "project_threshold": c.get("project_threshold"),
+                "application_overrides": c.get("application_overrides"),
+            }
+            for c in (listing.get("checks") or [])
+            if isinstance(c, dict)
+        ]
+        return respond(
+            state, {"project_id": pid, "count": len(checks), "checks": checks}
+        )
+
+    @mcp.tool(title="Get project configuration", annotations=READ_ONLY)
+    @guard
+    async def get_project_config(
+        ctx: ToolContext,
+        section: Annotated[
+            Literal["categories", "custom_applications", "pricing", "instance"],
+            Field(
+                description=(
+                    "categories: application categories, their patterns and "
+                    "notification routing. custom_applications: instance groups "
+                    "Coroot did not detect on its own. pricing: the per-core and "
+                    "per-GB rates used for cost estimates. instance: the Coroot "
+                    "instance's SSO, AI and Coroot Cloud settings."
+                )
+            ),
+        ],
+        project_id: ProjectIdParam = None,
+    ) -> dict[str, Any]:
+        """Read one section of a project's configuration."""
+        state = context(ctx)
+        if section == "instance":
+            return respond(
+                state,
+                {
+                    "sso": await state.coroot.system.sso(),
+                    "ai": await state.coroot.system.ai(),
+                    "cloud": await state.coroot.system.cloud_status(),
+                    "base_url": state.settings.base_url,
+                },
+            )
+
+        pid = await state.resolve_project(project_id)
+        if section == "categories":
+            categories = await state.coroot.categories.list(pid)
+            return respond(
+                state,
+                {"project_id": pid, "count": len(categories), "categories": categories},
+            )
+        if section == "custom_applications":
+            apps = await state.coroot.custom_applications.list(pid)
+            return respond(
+                state,
+                {"project_id": pid, "count": len(apps), "custom_applications": apps},
+            )
+        pricing = await state.coroot.cloud_pricing.get(pid)
+        return respond(state, {"project_id": pid, **pricing})
+
+    @mcp.tool(title="Get integrations", annotations=READ_ONLY)
+    @guard
+    async def get_integrations(
+        ctx: ToolContext,
+        project_id: ProjectIdParam = None,
+        integration_type: Annotated[
+            IntegrationType | None,
+            Field(
+                description=(
+                    "Return one integration's settings. Omit to list the "
+                    "notification integrations and which events each receives."
+                )
+            ),
+        ] = None,
+    ) -> dict[str, Any]:
+        """List notification integrations, or read one integration's settings.
+
+        The listing covers the notification types only; name a type to read any
+        integration, data sources included. Credentials come back redacted,
+        because Coroot returns them in clear to accounts that may edit them.
+        """
+        state, pid = await target(ctx, project_id)
+        if integration_type:
+            data = await state.coroot.integrations.get(pid, integration_type)
+            payload = data if isinstance(data, dict) else {"value": data}
+            safe = redact_secrets(payload, reveal=state.settings.reveal_secrets)
+            return respond(state, {"project_id": pid, "type": integration_type, **safe})
+        listed = await state.coroot.integrations.list(pid)
+        return respond(state, {"project_id": pid, **listed})
+
+    @mcp.tool(title="Get database instrumentation", annotations=READ_ONLY)
+    @guard
+    async def get_db_instrumentation(
+        ctx: ToolContext,
+        app_id: AppIdParam,
+        db_type: DatabaseTypeParam,
+        project_id: ProjectIdParam = None,
+    ) -> dict[str, Any]:
+        """Check how Coroot collects statistics from a database.
+
+        Reports the port, parameters and whether collection is enabled. The
+        stored username and password are redacted, because Coroot returns them
+        in clear to accounts that may edit them; set COROOT_REVEAL_SECRETS to
+        read them.
+        """
+        state, pid = await target(ctx, project_id)
+        kind = db_type
+        data = await state.coroot.applications.get_instrumentation(pid, app_id, kind)
+        safe = redact_secrets(data, reveal=state.settings.reveal_secrets)
+        return respond(
+            state,
+            {
+                "project_id": pid,
+                "application_id": normalize_app_id(app_id, project_id=pid),
+                **safe,
+            },
+        )
+
+    if settings.read_only:
+        return
+
+    @mcp.tool(title="Set an inspection threshold", annotations=WRITE)
+    @guard
+    async def update_inspection_config(
+        ctx: ToolContext,
+        check_id: CheckIdParam,
+        config: Annotated[
+            dict[str, Any],
+            Field(
+                description=(
+                    "The form to save, in the shape get_inspection_config "
+                    'returned. Simple checks take {"configs": [null, '
+                    '{"threshold": 90}, null]} where index 1 is the project '
+                    "override and index 2 the application override; null clears "
+                    "an override."
+                )
+            ),
+        ],
+        project_id: ProjectIdParam = None,
+        app_id: ScopeAppParam = None,
+    ) -> dict[str, Any]:
+        """Change a check's threshold, or define a custom SLO.
+
+        Read the current form with get_inspection_config first: the positional
+        layout matters.
+        """
+        state, pid = await target(ctx, project_id)
+        scope = app_id or PROJECT_SCOPE_APP_ID
+        await state.coroot.applications.set_inspection_config(
+            pid, scope, one_of(check_id, CHECK_IDS, name="check_id"), config
+        )
+        return ok(
+            f"Updated {check_id} configuration", project_id=pid, check_id=check_id
+        )
+
+    @mcp.tool(title="Create or update an application category", annotations=WRITE)
+    @guard
+    async def save_application_category(
+        ctx: ToolContext,
+        name: Annotated[
+            str,
+            Field(
+                description=(
+                    "Category name: at least 3 characters of lowercase letters, "
+                    "digits, '-' or '_'."
+                )
+            ),
+        ],
+        project_id: ProjectIdParam = None,
+        custom_patterns: Annotated[
+            list[str] | None,
+            Field(
+                description=(
+                    "Glob patterns matching 'namespace/application-name', e.g. "
+                    "['staging/*', 'default/api-*']. Omit to keep the existing "
+                    "patterns."
+                )
+            ),
+        ] = None,
+        current_name: Annotated[
+            str | None,
+            Field(description="Existing category name when renaming or updating one."),
+        ] = None,
+        notification_settings: Annotated[
+            dict[str, Any] | None,
+            Field(
+                description=(
+                    "Notification routing for incidents, deployments and alerts, "
+                    "in the shape get_project_config('categories') returns. Omit "
+                    "to "
+                    "keep the existing routing."
+                )
+            ),
+        ] = None,
+    ) -> dict[str, Any]:
+        """Create an application category, or update an existing one.
+
+        Categories drive grouping and notification routing. Pass current_name to
+        edit or rename one; anything you leave out keeps its current value,
+        because Coroot replaces the whole category on save.
+        """
+        state, pid = await target(ctx, project_id)
+        if name == "application" and custom_patterns:
+            raise ToolError(
+                "'application' is Coroot's default category and matches whatever "
+                "no other category claims, so it cannot take patterns. Create a "
+                "category with its own name instead."
+            )
+        # Coroot's save is a full replace: an omitted field is stored as empty.
+        # Start from the current form so partial updates do not wipe the rest.
+        form = await state.coroot.categories.get_form(pid, current_name or "")
+        form["action"] = ""
+        form["id"] = current_name or ""
+        form["name"] = name
+        if custom_patterns is not None:
+            form["custom_patterns"] = " ".join(custom_patterns)
+        if notification_settings is not None:
+            form["notification_settings"] = notification_settings
+        await state.coroot.categories.save(pid, form)
+        return ok(f"Saved category {name!r}", project_id=pid, name=name)
+
+    @mcp.tool(title="Create or update a custom application", annotations=WRITE)
+    @guard
+    async def save_custom_application(
+        ctx: ToolContext,
+        name: Annotated[
+            str, Field(description="Custom application name (slug format).")
+        ],
+        instance_patterns: Annotated[
+            list[str],
+            Field(
+                description="Glob patterns matching instance names, e.g. ['worker-*'].",
+                min_length=1,
+            ),
+        ],
+        project_id: ProjectIdParam = None,
+        current_name: Annotated[
+            str | None, Field(description="Existing name when renaming or updating.")
+        ] = None,
+    ) -> dict[str, Any]:
+        """Group instances that Coroot did not detect as one application."""
+        state, pid = await target(ctx, project_id)
+        await state.coroot.custom_applications.save(
+            pid,
+            name=name,
+            instance_patterns=instance_patterns,
+            current_name=current_name,
+        )
+        return ok(f"Saved custom application {name!r}", project_id=pid, name=name)
+
+    @mcp.tool(title="Delete part of a project's configuration", annotations=DESTRUCTIVE)
+    @guard
+    async def delete_project_config(
+        ctx: ToolContext,
+        section: Annotated[
+            Literal["category", "custom_application", "integration"],
+            Field(description="What kind of object to remove."),
+        ],
+        name: Annotated[
+            str,
+            Field(
+                description=(
+                    "The category name, custom application name, or integration "
+                    "type to remove."
+                )
+            ),
+        ],
+        project_id: ProjectIdParam = None,
+    ) -> dict[str, Any]:
+        """Remove an application category, a custom application or an integration.
+
+        Coroot's built-in categories are kept whatever this asks. Prometheus
+        cannot be removed: a project always needs a metrics source, so replace it
+        with configure_integration instead.
+        """
+        state, pid = await target(ctx, project_id)
+        if section == "category":
+            await state.coroot.categories.delete(pid, name)
+        elif section == "custom_application":
+            await state.coroot.custom_applications.delete(pid, name)
+        else:
+            kind = one_of(name, INTEGRATION_TYPES, name="name")
+            await state.coroot.integrations.delete(pid, kind)
+        return ok(f"Deleted {section} {name!r}", project_id=pid)
+
+    @mcp.tool(title="Configure an integration", annotations=WRITE)
+    @guard
+    async def configure_integration(
+        ctx: ToolContext,
+        integration_type: IntegrationTypeParam,
+        config: Annotated[
+            dict[str, Any],
+            Field(
+                description=(
+                    "Integration settings. slack: {token, default_channel, "
+                    "incidents, deployments, alerts}. pagerduty: "
+                    "{integration_key, incidents, alerts}. opsgenie: {api_key, "
+                    "eu_instance, incidents, alerts}. teams: {channels: "
+                    "[{name, webhook_url}], default_channel, ...}. webhook: "
+                    "{url, incident_template, ...}. prometheus: {url, "
+                    "refresh_interval, basic_auth, extra_selector}. clickhouse: "
+                    "{protocol, addr, auth, database}. aws: {region, "
+                    "access_key_id, secret_access_key}."
+                )
+            ),
+        ],
+        project_id: ProjectIdParam = None,
+        test_only: Annotated[
+            bool,
+            Field(
+                description=(
+                    "Test the settings without saving. Chat and paging "
+                    "integrations send a sample notification."
+                )
+            ),
+        ] = False,
+    ) -> dict[str, Any]:
+        """Configure or test a notification or data-source integration.
+
+        Coroot validates and connects before saving, so an invalid endpoint or
+        token is reported as an error. Read the current shape with
+        get_integrations first, but note that its credentials come back
+        redacted:
+        replace those placeholders with real values, never send one back.
+        """
+        state, pid = await target(ctx, project_id)
+        kind = integration_type
+        if masked := find_placeholders(config):
+            raise ToolError(
+                f"config still holds a redaction placeholder at: {', '.join(masked)}. "
+                "Coroot would store it verbatim and break the integration. Supply "
+                "the real secret values, or leave the integration as it is."
+            )
+        if test_only:
+            await state.coroot.integrations.test(pid, kind, config)
+            return ok(f"{kind} integration test succeeded", project_id=pid, type=kind)
+        await state.coroot.integrations.save(pid, kind, config)
+        return ok(f"Configured {kind} integration", project_id=pid, type=kind)
+
+    @mcp.tool(title="Configure database instrumentation", annotations=WRITE)
+    @guard
+    async def configure_db_instrumentation(
+        ctx: ToolContext,
+        app_id: AppIdParam,
+        db_type: DatabaseTypeParam,
+        username: Annotated[
+            str | None, Field(description="Username Coroot should connect with.")
+        ] = None,
+        password: Annotated[
+            str | None, Field(description="Password for that user.")
+        ] = None,
+        port: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Port to connect to. Defaults to the standard port for the engine."
+                )
+            ),
+        ] = None,
+        enabled: Annotated[
+            bool, Field(description="Whether to collect statistics.")
+        ] = True,
+        params: Annotated[
+            dict[str, str] | None,
+            Field(
+                description="Extra connection parameters, e.g. {'sslmode': 'disable'}."
+            ),
+        ] = None,
+        project_id: ProjectIdParam = None,
+    ) -> dict[str, Any]:
+        """Let Coroot log into a database to collect its internal statistics.
+
+        This unlocks the engine-specific reports (query latency, replication lag,
+        connection counts) that plain metrics cannot provide.
+        """
+        state, pid = await target(ctx, project_id)
+        kind = db_type
+        if placeholders := find_placeholders(
+            {"username": username, "password": password}
+        ):
+            raise ToolError(
+                f"the {', '.join(placeholders)} value is a redaction placeholder, "
+                "not a real credential. Supply the actual value."
+            )
+        config: dict[str, Any] = {
+            "type": kind,
+            "port": port or INSTRUMENTATION_DEFAULT_PORTS[kind],
+            "credentials": {"username": username or "", "password": password or ""},
+            "params": params or {},
+            "enabled": enabled,
+        }
+        await state.coroot.applications.set_instrumentation(pid, app_id, config)
+        return ok(
+            f"Configured {kind} instrumentation",
+            project_id=pid,
+            application_id=normalize_app_id(app_id, project_id=pid),
+        )
+
+    @mcp.tool(title="Link a telemetry service to an application", annotations=WRITE)
+    @guard
+    async def link_telemetry_service(
+        ctx: ToolContext,
+        app_id: AppIdParam,
+        kind: Annotated[
+            Literal["profiling", "tracing", "logs"],
+            Field(description="Which telemetry stream to link."),
+        ],
+        service: Annotated[
+            str,
+            Field(
+                description=(
+                    "OpenTelemetry service name reporting that data. Empty string "
+                    "unlinks."
+                )
+            ),
+        ],
+        project_id: ProjectIdParam = None,
+    ) -> dict[str, Any]:
+        """Tell Coroot which OpenTelemetry service belongs to an application.
+
+        Use it when traces, logs or profiles arrive under a service name Coroot
+        did not match automatically.
+        """
+        state, pid = await target(ctx, project_id)
+        setter = {
+            "profiling": state.coroot.applications.set_profiling_service,
+            "tracing": state.coroot.applications.set_tracing_service,
+            "logs": state.coroot.applications.set_logs_service,
+        }[kind]
+        await setter(pid, app_id, service)
+        return ok(
+            f"Linked {kind} service {service!r}",
+            project_id=pid,
+            application_id=normalize_app_id(app_id, project_id=pid),
+        )
+
+    @mcp.tool(title="Set cloud pricing", annotations=WRITE)
+    @guard
+    async def set_cloud_pricing(
+        ctx: ToolContext,
+        per_cpu_core: Annotated[
+            float | None,
+            Field(description="Hourly price of one CPU core.", gt=0),
+        ] = None,
+        per_memory_gb: Annotated[
+            float | None,
+            Field(description="Hourly price of one GB of memory.", gt=0),
+        ] = None,
+        project_id: ProjectIdParam = None,
+    ) -> dict[str, Any]:
+        """Override the cloud pricing used for cost estimates.
+
+        Omit both prices to drop the override and go back to Coroot's built-in
+        rates.
+        """
+        state, pid = await target(ctx, project_id)
+        if per_cpu_core is None and per_memory_gb is None:
+            await state.coroot.cloud_pricing.reset(pid)
+            return ok("Reset cloud pricing to Coroot's defaults", project_id=pid)
+        if per_cpu_core is None or per_memory_gb is None:
+            raise ToolError(
+                "set both per_cpu_core and per_memory_gb to override pricing, or "
+                "neither to reset it"
+            )
+        await state.coroot.cloud_pricing.set(
+            pid, per_cpu_core=per_cpu_core, per_memory_gb=per_memory_gb
+        )
+        return ok("Updated cloud pricing", project_id=pid)

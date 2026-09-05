@@ -1,31 +1,41 @@
-FROM python:3.11-slim
+# syntax=docker/dockerfile:1
 
-# Set working directory
+FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim AS builder
+
+ENV UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy \
+    UV_PYTHON_DOWNLOADS=never
+
 WORKDIR /app
 
-# Install uv for fast Python package management
-RUN pip install uv
+# Install dependencies first so the layer is cached across source changes.
+RUN --mount=type=cache,target=/root/.cache/uv \
+    --mount=type=bind,source=uv.lock,target=uv.lock \
+    --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
+    uv sync --locked --no-install-project --no-dev
 
-# Copy necessary files for package installation
 COPY pyproject.toml uv.lock README.md ./
-
-# Copy source code
 COPY src/ ./src/
 
-# Create virtual environment and install dependencies
-RUN uv venv && \
-    . .venv/bin/activate && \
-    uv pip install -e .
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --locked --no-dev
 
-# Define all environment variables with defaults
-# Non-sensitive defaults
-ENV COROOT_BASE_URL=http://localhost:8080
 
-# Sensitive variables - should be overridden at runtime
-ENV COROOT_USERNAME=""
-ENV COROOT_PASSWORD=""
-ENV COROOT_SESSION_COOKIE=""
-ENV COROOT_API_KEY=""
+FROM python:3.13-slim-bookworm AS runtime
 
-# Run the MCP server using the entry point
-CMD [".venv/bin/mcp-coroot"]
+# stdout carries the MCP protocol on stdio; keep it unbuffered and clean.
+ENV PATH="/app/.venv/bin:$PATH" \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    COROOT_BASE_URL=http://localhost:8080
+
+RUN useradd --create-home --uid 1000 coroot
+WORKDIR /app
+
+COPY --from=builder --chown=coroot:coroot /app/.venv /app/.venv
+
+USER coroot
+
+# Credentials come from the environment at run time, never baked into the image:
+#   COROOT_USERNAME / COROOT_PASSWORD, or COROOT_SESSION_COOKIE, or COROOT_API_KEY.
+ENTRYPOINT ["mcp-coroot"]

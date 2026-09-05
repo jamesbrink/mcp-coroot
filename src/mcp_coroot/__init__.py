@@ -1,34 +1,46 @@
-"""MCP server for Coroot observability platform.
+"""MCP server for the Coroot observability platform.
 
-This package provides a Model Context Protocol (MCP) server that exposes
-Coroot's observability APIs as tools for AI assistants like Claude.
+The MCP server is the primary entry point (``mcp-coroot`` on the command line),
+but :class:`CorootClient` is usable on its own as an async client for Coroot's
+API::
 
-The server enables:
-- Application and infrastructure monitoring
-- Performance profiling and distributed tracing
-- Log analysis and incident management
-- System configuration and integrations
-- Cost tracking and risk assessment
+    from mcp_coroot import CorootClient, Settings
 
-Quick Start:
-    ```bash
-    # Install the package
-    pip install mcp-coroot
-
-    # Set environment variables
-    export COROOT_BASE_URL="http://localhost:8080"
-    export COROOT_USERNAME="admin"
-    export COROOT_PASSWORD="your-password"
-
-    # Run the server
-    mcp-coroot
-    ```
-
-For more information, see: https://github.com/jamesbrink/mcp-coroot
+    async with CorootClient(Settings.from_env()) as coroot:
+        projects = await coroot.projects.list()
 """
 
-from .client import CorootClient, CorootError
-from .server import mcp
+from ._version import __version__
+from .client import (
+    ApplicationId,
+    CorootAuthenticationError,
+    CorootClient,
+    CorootConflictError,
+    CorootConnectionError,
+    CorootError,
+    CorootNotFoundError,
+    CorootPermissionError,
+    CorootServerError,
+    CorootUnsupportedError,
+    CorootValidationError,
+    normalize_app_id,
+)
+from .config import ConfigError, Settings
 
-__version__ = "0.1.0"
-__all__ = ["CorootClient", "CorootError", "mcp", "__version__"]
+__all__ = [
+    "ApplicationId",
+    "ConfigError",
+    "CorootAuthenticationError",
+    "CorootClient",
+    "CorootConflictError",
+    "CorootConnectionError",
+    "CorootError",
+    "CorootNotFoundError",
+    "CorootPermissionError",
+    "CorootServerError",
+    "CorootUnsupportedError",
+    "CorootValidationError",
+    "Settings",
+    "__version__",
+    "normalize_app_id",
+]

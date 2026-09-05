@@ -1,0 +1,76 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.jamesbrink/mcp-coroot",
+  "description": "MCP server for Coroot: application health, logs, traces, metrics, incidents and alerts",
+  "version": "1.0.0",
+  "repository": {
+    "url": "https://github.com/jamesbrink/mcp-coroot",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registryType": "pypi",
+      "registryBaseUrl": "https://pypi.org",
+      "identifier": "mcp-coroot",
+      "version": "1.0.0",
+      "runtimeHint": "uvx",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "COROOT_BASE_URL",
+          "description": "URL of the Coroot instance, e.g. https://coroot.example.com",
+          "isRequired": false
+        },
+        {
+          "name": "COROOT_USERNAME",
+          "description": "Username for automatic login",
+          "isRequired": false
+        },
+        {
+          "name": "COROOT_PASSWORD",
+          "description": "Password for automatic login",
+          "isRequired": false,
+          "isSecret": true
+        },
+        {
+          "name": "COROOT_SESSION_COOKIE",
+          "description": "Existing coroot_session cookie, for SSO or MFA logins",
+          "isRequired": false,
+          "isSecret": true
+        },
+        {
+          "name": "COROOT_PROJECT",
+          "description": "Default project id used when a tool call omits project_id",
+          "isRequired": false
+        },
+        {
+          "name": "COROOT_READ_ONLY",
+          "description": "Set to true to expose only tools that read from Coroot",
+          "isRequired": false
+        },
+        {
+          "name": "COROOT_REVEAL_SECRETS",
+          "description": "Set to true to let integration and database credentials reach the model",
+          "isRequired": false
+        },
+        {
+          "name": "COROOT_TIMEOUT",
+          "description": "HTTP timeout in seconds (default 30)",
+          "isRequired": false
+        },
+        {
+          "name": "COROOT_VERIFY_SSL",
+          "description": "Set to false to skip TLS verification",
+          "isRequired": false
+        },
+        {
+          "name": "COROOT_MAX_OUTPUT_CHARS",
+          "description": "Character budget for one tool response (default 40000)",
+          "isRequired": false
+        }
+      ]
+    }
+  ]
+}
