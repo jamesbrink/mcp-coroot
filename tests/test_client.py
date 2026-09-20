@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
-from mcp_coroot.client import CorootClient, CorootError
+from mcp_coroot.client import CorootClient, CorootError, encode_app_id
 
 # ============================================================================
 # Client Initialization and Authentication Tests
@@ -1829,3 +1829,163 @@ class TestErrorHandling:
                 CorootError, match="API request failed: Network unreachable"
             ):
                 await client.list_projects()
+
+
+# ============================================================================
+# Application ID contract: discovery -> detail (MEM-f48c2a17)
+# ============================================================================
+
+
+class TestApplicationIdContract:
+    """Discovery returns cluster_id:namespace:kind:name; detail reuses it verbatim.
+
+    Rougit si le detail cesse de transmettre l'ID discovery tel quel (rewritten,
+    truncated, or re-segmented), ou si les timestamps cessent d'etre transmis
+    tels quels (conversion secondes<->millisecondes).
+    """
+
+    DISCOVERY_APP_ID = "demo-cluster:demo-ns:Deployment:demo-app%2F/worker"
+
+    def _ok_response(self, payload):
+        mock_response = AsyncMock()
+        mock_response.json = Mock(return_value=payload)
+        mock_response.raise_for_status = AsyncMock()
+        return mock_response
+
+    def test_encode_app_id_keeps_four_segment_id_single_segment(self):
+        """Encode raw colons, slashes and literal percent signs exactly once."""
+        assert (
+            encode_app_id(self.DISCOVERY_APP_ID)
+            == "demo-cluster%3Ademo-ns%3ADeployment%3Ademo-app%252F%2Fworker"
+        )
+
+    def test_encode_app_id_legacy_three_segment_forwarded_not_rewritten(self):
+        """Legacy ns/kind/name is encoded, NOT rewritten to 4 segments."""
+        assert encode_app_id("demo-ns/Deployment/demo-app") == (
+            "demo-ns%2FDeployment%2Fdemo-app"
+        )
+
+    async def test_get_application_reuses_discovery_id_and_ms_window(self):
+        """GET /api/project/{p}/app/{encoded} with from/to passed through as-is.
+
+        Rougit si l'encode client est supprime (':' bruts dans raw_path) et si
+        les timestamps cessent d'etre transmis tels quels en ms.
+        """
+        import httpx
+
+        seen: dict[str, object] = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen["raw_path"] = request.url.raw_path
+            seen["params"] = dict(request.url.params)
+            return httpx.Response(200, json={"id": self.DISCOVERY_APP_ID})
+
+        client = CorootClient(
+            base_url="http://localhost:8080", session_cookie="test-cookie"
+        )
+        transport = httpx.MockTransport(handler)
+        real_client_cls = httpx.AsyncClient
+        with patch(
+            "httpx.AsyncClient",
+            side_effect=lambda *a, **k: real_client_cls(transport=transport),
+        ):
+            app = await client.get_application(
+                "demo-project",
+                self.DISCOVERY_APP_ID,
+                from_timestamp=1700000000000,
+                to_timestamp=1700001800000,
+            )
+        raw_path = bytes(seen["raw_path"]).decode("ascii")
+        assert raw_path.split("?", 1)[0] == (
+            "/api/project/demo-project/app/"
+            "demo-cluster%3Ademo-ns%3ADeployment%3Ademo-app%252F%2Fworker"
+        ), raw_path
+        assert seen["params"] == {
+            "from": "1700000000000",
+            "to": "1700001800000",
+        }
+        assert app["id"] == self.DISCOVERY_APP_ID
+
+    async def test_get_application_400_is_api_error_not_rewritten(self):
+        """Coroot 400 on a bad ID surfaces as CorootError, not a silent rewrite."""
+        client = CorootClient(
+            base_url="http://localhost:8080", username="admin", password="password"
+        )
+        mock_response = AsyncMock()
+        mock_response.status_code = 400
+        mock_response.text = "invalid application id"
+        import httpx
+
+        mock_response.raise_for_status = Mock(
+            side_effect=httpx.HTTPStatusError(
+                "400",
+                request=Mock(spec=httpx.Request),
+                response=mock_response,
+            )
+        )
+        with patch("httpx.AsyncClient.request", return_value=mock_response):
+            with pytest.raises(CorootError, match="invalid application id"):
+                await client.get_application(
+                    "demo-project", "demo-ns/Deployment/demo-app"
+                )
+
+    async def test_logs_traces_reuse_discovery_id(self):
+        """Logs/tracing drill-downs carry the same encoded discovery ID."""
+        import httpx
+
+        seen_logs: dict[str, object] = {}
+        seen_traces: dict[str, object] = {}
+
+        def logs_handler(request: httpx.Request) -> httpx.Response:
+            seen_logs["raw_path"] = request.url.raw_path
+            seen_logs["params"] = dict(request.url.params)
+            return httpx.Response(200, json={"logs": []})
+
+        def traces_handler(request: httpx.Request) -> httpx.Response:
+            seen_traces["raw_path"] = request.url.raw_path
+            seen_traces["params"] = dict(request.url.params)
+            return httpx.Response(200, json={"traces": []})
+
+        client = CorootClient(
+            base_url="http://localhost:8080", session_cookie="test-cookie"
+        )
+        expected = "demo-cluster%3Ademo-ns%3ADeployment%3Ademo-app%252F%2Fworker"
+        transport_logs = httpx.MockTransport(logs_handler)
+        transport_traces = httpx.MockTransport(traces_handler)
+        real_client_cls = httpx.AsyncClient
+        with patch(
+            "httpx.AsyncClient",
+            side_effect=lambda *a, **k: real_client_cls(transport=transport_logs),
+        ):
+            await client.get_application_logs(
+                "demo-project",
+                self.DISCOVERY_APP_ID,
+                from_timestamp=1700000000000,
+                to_timestamp=1700001800000,
+            )
+        with patch(
+            "httpx.AsyncClient",
+            side_effect=lambda *a, **k: real_client_cls(transport=transport_traces),
+        ):
+            await client.get_application_traces(
+                "demo-project",
+                self.DISCOVERY_APP_ID,
+                from_timestamp=1700000000000,
+                to_timestamp=1700001800000,
+            )
+        logs_path = bytes(seen_logs["raw_path"]).decode("ascii")
+        traces_path = bytes(seen_traces["raw_path"]).decode("ascii")
+        assert logs_path.split("?", 1)[0] == (
+            f"/api/project/demo-project/app/{expected}/logs"
+        ), logs_path
+        assert traces_path.split("?", 1)[0] == (
+            f"/api/project/demo-project/app/{expected}/tracing"
+        ), traces_path
+        assert seen_logs["params"] == {
+            "from": "1700000000000",
+            "to": "1700001800000",
+        }
+        assert seen_traces["params"] == {
+            "from": "1700000000000",
+            "to": "1700001800000",
+        }

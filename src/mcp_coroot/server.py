@@ -28,7 +28,6 @@ import json
 from collections.abc import Callable
 from functools import wraps
 from typing import Any, TypeVar
-from urllib.parse import quote
 
 from fastmcp import FastMCP
 
@@ -243,11 +242,8 @@ async def get_application_impl(
     to_timestamp: int | None = None,
 ) -> dict[str, Any]:
     """Get application details and metrics."""
-    # URL encode the app_id since it contains slashes
-    encoded_app_id = quote(app_id, safe="")
-
     app = await get_client().get_application(
-        project_id, encoded_app_id, from_timestamp, to_timestamp
+        project_id, app_id, from_timestamp, to_timestamp
     )
     return {
         "success": True,
@@ -272,9 +268,18 @@ async def get_application(
 
     Args:
         project_id: Project ID
-        app_id: Application ID (format: namespace/kind/name)
-        from_timestamp: Start timestamp for metrics (optional)
-        to_timestamp: End timestamp for metrics (optional)
+        app_id: Application ID exactly as returned by discovery
+            (format: cluster_id:namespace:kind:name, e.g.
+            ``demo-cluster:demo-namespace:Deployment:demo-app``). Reused
+            verbatim in ``get_application`` and the other drill-downs; a
+            3-segment ``namespace/kind/name`` value is forwarded unchanged and
+            rejected by Coroot (HTTP 400/404, surfaced as an ``api_error``),
+            never silently rewritten.
+        from_timestamp: Start timestamp for metrics (optional), in
+            MILLISECONDS since the Unix epoch, passed through unchanged.
+            A seconds value reads as January 1970 server-side.
+        to_timestamp: End timestamp for metrics (optional), in MILLISECONDS
+            since the Unix epoch, passed through unchanged.
     """
     return await get_application_impl(  # type: ignore[no-any-return]
         project_id, app_id, from_timestamp, to_timestamp
@@ -291,11 +296,8 @@ async def get_application_logs_impl(
     severity: str | None = None,
 ) -> dict[str, Any]:
     """Get application logs."""
-    # URL encode the app_id since it contains slashes
-    encoded_app_id = quote(app_id, safe="")
-
     logs = await get_client().get_application_logs(
-        project_id, encoded_app_id, from_timestamp, to_timestamp, query, severity
+        project_id, app_id, from_timestamp, to_timestamp, query, severity
     )
     return {
         "success": True,
@@ -320,9 +322,13 @@ async def get_application_logs(
 
     Args:
         project_id: Project ID
-        app_id: Application ID (format: namespace/kind/name)
-        from_timestamp: Start timestamp (optional)
-        to_timestamp: End timestamp (optional)
+        app_id: Application ID exactly as returned by discovery
+            (format: cluster_id:namespace:kind:name). Reused verbatim;
+            never silently rewritten.
+        from_timestamp: Start timestamp (optional), in MILLISECONDS since
+            the Unix epoch, passed through unchanged.
+        to_timestamp: End timestamp (optional), in MILLISECONDS since the
+            Unix epoch, passed through unchanged.
         query: Log search query (optional)
         severity: Filter by severity level (optional)
     """
@@ -341,11 +347,8 @@ async def get_application_traces_impl(
     query: str | None = None,
 ) -> dict[str, Any]:
     """Get application traces."""
-    # URL encode the app_id since it contains slashes
-    encoded_app_id = quote(app_id, safe="")
-
     traces = await get_client().get_application_traces(
-        project_id, encoded_app_id, from_timestamp, to_timestamp, trace_id, query
+        project_id, app_id, from_timestamp, to_timestamp, trace_id, query
     )
     return {
         "success": True,
@@ -373,9 +376,13 @@ async def get_application_traces(
 
     Args:
         project_id: Project ID
-        app_id: Application ID (format: namespace/kind/name)
-        from_timestamp: Start timestamp (optional, recommended to limit data)
-        to_timestamp: End timestamp (optional, recommended to limit data)
+        app_id: Application ID exactly as returned by discovery
+            (format: cluster_id:namespace:kind:name). Reused verbatim;
+            never silently rewritten.
+        from_timestamp: Start timestamp (optional, recommended to limit data),
+            in MILLISECONDS since the Unix epoch, passed through unchanged.
+        to_timestamp: End timestamp (optional, recommended to limit data), in
+            MILLISECONDS since the Unix epoch, passed through unchanged.
         trace_id: Specific trace ID to retrieve (optional, returns single trace)
         query: Search query (optional)
     """
@@ -711,7 +718,9 @@ async def get_inspection_config(
 
     Args:
         project_id: Project ID
-        app_id: Application ID (format: namespace/kind/name)
+        app_id: Application ID exactly as returned by discovery
+            (format: cluster_id:namespace:kind:name). Reused verbatim;
+            never silently rewritten.
         inspection_type: Type of inspection (cpu, memory, slo, etc)
     """
     return await get_inspection_config_impl(  # type: ignore[no-any-return]
@@ -751,7 +760,9 @@ async def update_inspection_config(
 
     Args:
         project_id: Project ID
-        app_id: Application ID (format: namespace/kind/name)
+        app_id: Application ID exactly as returned by discovery
+            (format: cluster_id:namespace:kind:name). Reused verbatim;
+            never silently rewritten.
         inspection_type: Type of inspection (cpu, memory, slo, etc)
         config: New configuration (format varies by type)
     """
@@ -1058,7 +1069,9 @@ async def get_application_rca(
 
     Args:
         project_id: Project ID
-        app_id: Application ID (format: namespace/kind/name)
+        app_id: Application ID exactly as returned by discovery
+            (format: cluster_id:namespace:kind:name). Reused verbatim;
+            never silently rewritten.
     """
     return await get_application_rca_impl(project_id, app_id)  # type: ignore[no-any-return]
 
@@ -1101,9 +1114,13 @@ async def get_application_profiling(
 
     Args:
         project_id: Project ID
-        app_id: Application ID (format: namespace/kind/name)
-        from_timestamp: Start timestamp (optional, strongly recommended)
-        to_timestamp: End timestamp (optional, strongly recommended)
+        app_id: Application ID exactly as returned by discovery
+            (format: cluster_id:namespace:kind:name). Reused verbatim;
+            never silently rewritten.
+        from_timestamp: Start timestamp (optional, strongly recommended), in
+            MILLISECONDS since the Unix epoch, passed through unchanged.
+        to_timestamp: End timestamp (optional, strongly recommended), in
+            MILLISECONDS since the Unix epoch, passed through unchanged.
         query: Search query (optional)
     """
     return await get_application_profiling_impl(  # type: ignore[no-any-return]
@@ -1139,7 +1156,9 @@ async def update_application_risks(
 
     Args:
         project_id: Project ID
-        app_id: Application ID (format: namespace/kind/name)
+        app_id: Application ID exactly as returned by discovery
+            (format: cluster_id:namespace:kind:name). Reused verbatim;
+            never silently rewritten.
         risks: Risk assessment configuration
     """
     return await update_application_risks_impl(  # type: ignore[no-any-return]
@@ -1173,7 +1192,9 @@ async def get_db_instrumentation(
 
     Args:
         project_id: Project ID
-        app_id: Application ID (format: namespace/kind/name)
+        app_id: Application ID exactly as returned by discovery
+            (format: cluster_id:namespace:kind:name). Reused verbatim;
+            never silently rewritten.
         db_type: Database type (mysql, postgres, redis, mongodb, memcached)
     """
     return await get_db_instrumentation_impl(project_id, app_id, db_type)  # type: ignore[no-any-return]
@@ -1203,7 +1224,9 @@ async def update_db_instrumentation(
 
     Args:
         project_id: Project ID
-        app_id: Application ID (format: namespace/kind/name)
+        app_id: Application ID exactly as returned by discovery
+            (format: cluster_id:namespace:kind:name). Reused verbatim;
+            never silently rewritten.
         db_type: Database type (mysql, postgres, redis, mongodb, memcached)
         config: Instrumentation configuration
     """
@@ -2006,7 +2029,8 @@ async def configure_profiling(
 
     Args:
         project_id: The project ID
-        app_id: The application ID
+        app_id: Raw discovery ID (cluster_id:namespace:kind:name), forwarded
+            to the client without pre-encoding
         enabled: Whether to enable profiling
         sample_rate: Optional sampling rate (0.0-1.0)
     """
@@ -2085,7 +2109,8 @@ async def configure_tracing(
 
     Args:
         project_id: The project ID
-        app_id: The application ID
+        app_id: Raw discovery ID (cluster_id:namespace:kind:name), forwarded
+            to the client without pre-encoding
         enabled: Whether to enable tracing
         sample_rate: Optional trace sampling rate (0.0-1.0)
         excluded_paths: Optional list of URL paths to exclude
@@ -2138,7 +2163,8 @@ async def configure_logs(
 
     Args:
         project_id: The project ID
-        app_id: The application ID
+        app_id: Raw discovery ID (cluster_id:namespace:kind:name), forwarded
+            to the client without pre-encoding
         enabled: Whether to enable log collection
         level: Optional minimum log level (debug, info, warn, error)
         excluded_patterns: Optional regex patterns to exclude

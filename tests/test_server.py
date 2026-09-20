@@ -337,10 +337,10 @@ class TestApplicationTools:
             assert result["success"] is True
             assert result["application"] == mock_application
 
-            # Verify URL encoding was applied
+            # Server transmits raw; client encodes exactly once.
             mock_client.get_application.assert_called_once_with(
                 "project1",
-                "default%2Fdeployment%2Ffrontend",
+                "default/deployment/frontend",
                 None,
                 None,
             )
@@ -383,7 +383,7 @@ class TestApplicationTools:
             assert result["success"] is True
             assert result["logs"] == logs_data
 
-            # Verify URL encoding was applied
+            # Server transmits raw; client encodes exactly once.
             mock_client.get_application_logs.assert_called_once_with(
                 "project1", "app1", 1000, 2000, "error", "error"
             )

@@ -31,7 +31,9 @@ Example:
     projects = await client.list_projects()
 
     # Get application details
-    app = await client.get_application("project-1", "frontend")
+    app = await client.get_application(
+        "demo-project", "demo-cluster:demo-namespace:Deployment:demo-app"
+    )
     ```
 """
 
@@ -49,6 +51,22 @@ class CorootError(Exception):
     """Base exception for Coroot API errors."""
 
     pass
+
+
+def encode_app_id(app_id: str) -> str:
+    """Encode an application ID for use in a URL path segment.
+
+    The Coroot API identifies an application as
+    ``cluster_id:namespace:kind:name`` (4 colon-separated segments). The ID is
+    transmitted as a single path segment, so ``:`` and ``/`` must be
+    percent-encoded. ``httpx`` preserves ``%3A`` in ``raw_path`` and does not
+    double-encode it.
+
+    A legacy 3-segment ``namespace/kind/name`` form is still accepted and
+    passed through unchanged apart from encoding: Coroot rejects it with a
+    client-side 400/404, which surfaces unmodified through ``CorootError``.
+    """
+    return quote(app_id, safe="")
 
 
 class CorootClient:
@@ -362,13 +380,25 @@ class CorootClient:
 
         Args:
             project_id: Project ID.
-            app_id: Application ID (format: namespace/kind/name).
-            from_timestamp: Start timestamp for metrics.
-            to_timestamp: End timestamp for metrics.
+            app_id: Application ID as returned by discovery
+                (format: cluster_id:namespace:kind:name, e.g.
+                ``demo-cluster:demo-namespace:Deployment:demo-app``). Takes
+                the RAW discovery value and encodes it exactly once via
+                ``encode_app_id``; a 3-segment ``namespace/kind/name`` value
+                is forwarded unchanged and rejected
+                by Coroot (HTTP 400/404, surfaced as ``CorootError``), never
+                silently rewritten.
+            from_timestamp: Start timestamp for metrics, in MILLISECONDS since
+                the Unix epoch (as Coroot expects for ``from``). Passed through
+                unchanged; no seconds-to-milliseconds conversion is applied.
+            to_timestamp: End timestamp for metrics, in MILLISECONDS since
+                the Unix epoch (as Coroot expects for ``to``). Passed through
+                unchanged; no seconds-to-milliseconds conversion is applied.
 
         Returns:
             Application metrics and information.
         """
+        encoded_app_id = encode_app_id(app_id)
         params = {}
         if from_timestamp:
             params["from"] = str(from_timestamp)
@@ -377,7 +407,7 @@ class CorootClient:
 
         response = await self._request(
             "GET",
-            f"/api/project/{project_id}/app/{app_id}",
+            f"/api/project/{project_id}/app/{encoded_app_id}",
             params=params,
         )
         data: dict[str, Any] = response.json()
@@ -396,15 +426,21 @@ class CorootClient:
 
         Args:
             project_id: Project ID.
-            app_id: Application ID.
-            from_timestamp: Start timestamp.
-            to_timestamp: End timestamp.
+            app_id: Application ID as returned by discovery
+                (format: cluster_id:namespace:kind:name). Takes the RAW
+                discovery value and encodes it exactly once via
+                ``encode_app_id``; never silently rewritten.
+            from_timestamp: Start timestamp, in MILLISECONDS since the Unix
+                epoch. Passed through unchanged.
+            to_timestamp: End timestamp, in MILLISECONDS since the Unix
+                epoch. Passed through unchanged.
             query: Log search query.
             severity: Filter by severity level.
 
         Returns:
             Application logs and patterns.
         """
+        encoded_app_id = encode_app_id(app_id)
         params = {}
         if from_timestamp:
             params["from"] = str(from_timestamp)
@@ -417,7 +453,7 @@ class CorootClient:
 
         response = await self._request(
             "GET",
-            f"/api/project/{project_id}/app/{app_id}/logs",
+            f"/api/project/{project_id}/app/{encoded_app_id}/logs",
             params=params,
         )
         data: dict[str, Any] = response.json()
@@ -436,15 +472,21 @@ class CorootClient:
 
         Args:
             project_id: Project ID.
-            app_id: Application ID.
-            from_timestamp: Start timestamp.
-            to_timestamp: End timestamp.
+            app_id: Application ID as returned by discovery
+                (format: cluster_id:namespace:kind:name). Takes the RAW
+                discovery value and encodes it exactly once via
+                ``encode_app_id``; never silently rewritten.
+            from_timestamp: Start timestamp, in MILLISECONDS since the Unix
+                epoch. Passed through unchanged.
+            to_timestamp: End timestamp, in MILLISECONDS since the Unix
+                epoch. Passed through unchanged.
             trace_id: Specific trace ID.
             query: Search query.
 
         Returns:
             Distributed traces data.
         """
+        encoded_app_id = encode_app_id(app_id)
         params = {}
         if from_timestamp:
             params["from"] = str(from_timestamp)
@@ -457,7 +499,7 @@ class CorootClient:
 
         response = await self._request(
             "GET",
-            f"/api/project/{project_id}/app/{app_id}/tracing",
+            f"/api/project/{project_id}/app/{encoded_app_id}/tracing",
             params=params,
         )
         data: dict[str, Any] = response.json()
@@ -670,16 +712,15 @@ class CorootClient:
 
         Args:
             project_id: Project ID.
-            app_id: Application ID.
+            app_id: Application ID as returned by discovery
+                (format: cluster_id:namespace:kind:name). Encoded via
+                ``encode_app_id``; never silently rewritten.
             inspection_type: Type of inspection (cpu, memory, slo, etc).
 
         Returns:
             Inspection configuration.
         """
-        # URL encode the app_id since it contains slashes
-        from urllib.parse import quote
-
-        encoded_app_id = quote(app_id, safe="")
+        encoded_app_id = encode_app_id(app_id)
 
         response = await self._request(
             "GET",
@@ -695,17 +736,15 @@ class CorootClient:
 
         Args:
             project_id: Project ID.
-            app_id: Application ID.
-            inspection_type: Type of inspection (cpu, memory, slo, etc).
+            app_id: Application ID as returned by discovery
+                (format: cluster_id:namespace:kind:name). Encoded via
+                ``encode_app_id``; never silently rewritten.
             config: New configuration.
 
         Returns:
             Updated configuration.
         """
-        # URL encode the app_id since it contains slashes
-        from urllib.parse import quote
-
-        encoded_app_id = quote(app_id, safe="")
+        encoded_app_id = encode_app_id(app_id)
 
         response = await self._request(
             "POST",
@@ -830,15 +869,14 @@ class CorootClient:
 
         Args:
             project_id: Project ID.
-            app_id: Application ID (format: namespace/kind/name).
+            app_id: Application ID as returned by discovery
+                (format: cluster_id:namespace:kind:name). Encoded via
+                ``encode_app_id``; never silently rewritten.
 
         Returns:
             Root cause analysis results.
         """
-        # URL encode the app_id since it contains slashes
-        from urllib.parse import quote
-
-        encoded_app_id = quote(app_id, safe="")
+        encoded_app_id = encode_app_id(app_id)
 
         response = await self._request(
             "GET", f"/api/project/{project_id}/app/{encoded_app_id}/rca"
@@ -858,18 +896,19 @@ class CorootClient:
 
         Args:
             project_id: Project ID.
-            app_id: Application ID (format: namespace/kind/name).
-            from_timestamp: Start timestamp.
-            to_timestamp: End timestamp.
+            app_id: Application ID as returned by discovery
+                (format: cluster_id:namespace:kind:name). Encoded via
+                ``encode_app_id``; never silently rewritten.
+            from_timestamp: Start timestamp, in MILLISECONDS since the Unix
+                epoch. Passed through unchanged.
+            to_timestamp: End timestamp, in MILLISECONDS since the Unix
+                epoch. Passed through unchanged.
             query: Search query.
 
         Returns:
             Profiling data and flame graphs.
         """
-        # URL encode the app_id since it contains slashes
-        from urllib.parse import quote
-
-        encoded_app_id = quote(app_id, safe="")
+        encoded_app_id = encode_app_id(app_id)
 
         params = {}
         if from_timestamp:
@@ -894,16 +933,15 @@ class CorootClient:
 
         Args:
             project_id: Project ID.
-            app_id: Application ID (format: namespace/kind/name).
+            app_id: Application ID as returned by discovery
+                (format: cluster_id:namespace:kind:name). Encoded via
+                ``encode_app_id``; never silently rewritten.
             risks: Risk assessment updates.
 
         Returns:
             Updated risk configuration.
         """
-        # URL encode the app_id since it contains slashes
-        from urllib.parse import quote
-
-        encoded_app_id = quote(app_id, safe="")
+        encoded_app_id = encode_app_id(app_id)
 
         response = await self._request(
             "POST",
@@ -1388,16 +1426,15 @@ class CorootClient:
 
         Args:
             project_id: Project ID.
-            app_id: Application ID.
+            app_id: Application ID as returned by discovery
+                (format: cluster_id:namespace:kind:name). Encoded via
+                ``encode_app_id``; never silently rewritten.
             db_type: Database type (mysql, postgres, redis, mongodb, memcached).
 
         Returns:
             Database instrumentation configuration.
         """
-        # URL encode the app_id since it contains slashes
-        from urllib.parse import quote
-
-        encoded_app_id = quote(app_id, safe="")
+        encoded_app_id = encode_app_id(app_id)
 
         response = await self._request(
             "GET",
@@ -1413,17 +1450,16 @@ class CorootClient:
 
         Args:
             project_id: Project ID.
-            app_id: Application ID.
+            app_id: Application ID as returned by discovery
+                (format: cluster_id:namespace:kind:name). Encoded via
+                ``encode_app_id``; never silently rewritten.
             db_type: Database type (mysql, postgres, redis, mongodb, memcached).
             config: Instrumentation configuration.
 
         Returns:
             Updated instrumentation configuration.
         """
-        # URL encode the app_id since it contains slashes
-        from urllib.parse import quote
-
-        encoded_app_id = quote(app_id, safe="")
+        encoded_app_id = encode_app_id(app_id)
 
         response = await self._request(
             "POST",
@@ -1554,14 +1590,15 @@ class CorootClient:
 
         Args:
             project_id: The project ID
-            app_id: The application ID
+            app_id: The application ID as returned by discovery
+                (format: cluster_id:namespace:kind:name). Encoded via
+                ``encode_app_id``; never silently rewritten.
             config: Profiling configuration
 
         Returns:
             Dict containing updated configuration
         """
-        # URL encode the app_id in case it contains slashes
-        encoded_app_id = quote(app_id, safe="")
+        encoded_app_id = encode_app_id(app_id)
         response = await self._request(
             "POST",
             f"/api/project/{project_id}/app/{encoded_app_id}/profiling",
@@ -1577,14 +1614,15 @@ class CorootClient:
 
         Args:
             project_id: The project ID
-            app_id: The application ID
+            app_id: The application ID as returned by discovery
+                (format: cluster_id:namespace:kind:name). Encoded via
+                ``encode_app_id``; never silently rewritten.
             config: Tracing configuration
 
         Returns:
             Dict containing updated configuration
         """
-        # URL encode the app_id in case it contains slashes
-        encoded_app_id = quote(app_id, safe="")
+        encoded_app_id = encode_app_id(app_id)
         response = await self._request(
             "POST",
             f"/api/project/{project_id}/app/{encoded_app_id}/tracing",
@@ -1600,14 +1638,15 @@ class CorootClient:
 
         Args:
             project_id: The project ID
-            app_id: The application ID
+            app_id: The application ID as returned by discovery
+                (format: cluster_id:namespace:kind:name). Encoded via
+                ``encode_app_id``; never silently rewritten.
             config: Log collection configuration
 
         Returns:
             Dict containing updated configuration
         """
-        # URL encode the app_id in case it contains slashes
-        encoded_app_id = quote(app_id, safe="")
+        encoded_app_id = encode_app_id(app_id)
         response = await self._request(
             "POST", f"/api/project/{project_id}/app/{encoded_app_id}/logs", json=config
         )
