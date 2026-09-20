@@ -32,6 +32,12 @@ from typing import Any, TypeVar
 from fastmcp import FastMCP
 
 from .client import CorootClient, CorootError
+from .projection import (
+    check_application_caps,
+    check_overview_caps,
+    summarize_application,
+    summarize_overview,
+)
 
 # Initialize FastMCP server
 mcp = FastMCP("mcp-coroot")  # type: ignore[var-annotated]
@@ -240,11 +246,22 @@ async def get_application_impl(
     app_id: str,
     from_timestamp: int | None = None,
     to_timestamp: int | None = None,
+    summary: bool = False,
+    max_table_rows: int = 5,
+    max_nodes: int = 100,
 ) -> dict[str, Any]:
     """Get application details and metrics."""
+    check_application_caps(max_table_rows, max_nodes)
     app = await get_client().get_application(
         project_id, app_id, from_timestamp, to_timestamp
     )
+    if summary:
+        return {
+            "success": True,
+            "projection": summarize_application(
+                app, max_table_rows=max_table_rows, max_nodes=max_nodes
+            ),
+        }
     return {
         "success": True,
         "application": app,
@@ -257,6 +274,9 @@ async def get_application(
     app_id: str,
     from_timestamp: int | None = None,
     to_timestamp: int | None = None,
+    summary: bool = False,
+    max_table_rows: int = 5,
+    max_nodes: int = 100,
 ) -> dict[str, Any]:
     """Get application details and metrics.
 
@@ -280,9 +300,20 @@ async def get_application(
             A seconds value reads as January 1970 server-side.
         to_timestamp: End timestamp for metrics (optional), in MILLISECONDS
             since the Unix epoch, passed through unchanged.
+        summary: Opt-in bounded projection of the same payload (identity,
+            dependencies, report names/checks, explicit truncation counts).
+            Default False returns the full payload unchanged.
+        max_table_rows: Rows kept per table widget in the projection.
+        max_nodes: Graph nodes kept in the projection.
     """
     return await get_application_impl(  # type: ignore[no-any-return]
-        project_id, app_id, from_timestamp, to_timestamp
+        project_id,
+        app_id,
+        from_timestamp,
+        to_timestamp,
+        summary,
+        max_table_rows,
+        max_nodes,
     )
 
 
@@ -398,9 +429,17 @@ async def get_application_traces(
 async def get_applications_overview_impl(
     project_id: str,
     query: str | None = None,
+    summary: bool = False,
+    max_apps: int = 50,
 ) -> dict[str, Any]:
     """Get applications overview."""
+    check_overview_caps(max_apps)
     overview = await get_client().get_applications_overview(project_id, query)
+    if summary:
+        return {
+            "success": True,
+            "projection": summarize_overview(overview, max_apps=max_apps),
+        }
     return {
         "success": True,
         "overview": overview,
@@ -411,6 +450,8 @@ async def get_applications_overview_impl(
 async def get_applications_overview(
     project_id: str,
     query: str | None = None,
+    summary: bool = False,
+    max_apps: int = 50,
 ) -> dict[str, Any]:
     """Get overview of all applications in a project.
 
@@ -423,8 +464,14 @@ async def get_applications_overview(
     Args:
         project_id: Project ID
         query: Search/filter query (optional)
+        summary: Opt-in bounded projection of the same payload (identity,
+            health signals, explicit truncation counts). Default False
+            returns the full payload unchanged.
+        max_apps: Applications kept in the projection.
     """
-    return await get_applications_overview_impl(project_id, query)  # type: ignore[no-any-return]
+    return await get_applications_overview_impl(  # type: ignore[no-any-return]
+        project_id, query, summary, max_apps
+    )
 
 
 @handle_errors
